@@ -2,6 +2,9 @@ import axios from 'axios';
 
 const SP_API_ENDPOINT = 'https://sellingpartnerapi-eu.amazon.com'; // Change to -eu or -fe if needed
 
+// Official Amazon Marketplace ID for the United Kingdom
+const UK_MARKETPLACE_ID = 'A1F83G8C2ARO7P';
+
 /**
  * 1. Get the temporary Access Token from Amazon
  */
@@ -33,8 +36,8 @@ export async function fetchAmazonInventory() {
     params: {
       details: true,
       granularityType: 'Marketplace',
-      granularityId: 'A1F83G8C2ARO7P', // Standard ID UK/EU.
-      marketplaceIds: 'A1F83G8C2ARO7P',
+      granularityId: UK_MARKETPLACE_ID, // Standard ID UK/EU.
+      marketplaceIds: UK_MARKETPLACE_ID,
     },
   });
 
