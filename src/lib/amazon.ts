@@ -8,7 +8,7 @@ const UK_MARKETPLACE_ID = 'A1F83G8C2ARO7P';
 /**
  * 1. Get the temporary Access Token from Amazon
  */
-async function getAccessToken() {
+export async function getAccessToken() {
   try {
     const response = await axios.post('https://api.amazon.com/auth/o2/token', {
       grant_type: 'refresh_token',
