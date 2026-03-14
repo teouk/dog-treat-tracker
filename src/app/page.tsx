@@ -1,13 +1,33 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase'; // Import the client we made in Step 4
+import Login from '@/components/Login';
 
 export default function InventoryDashboard() {
   const [inventory, setInventory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // --- DELETE any handleAdjustment functions outside of this block ---
+  const [session, setSession] = useState<any>(null);
+
+  useEffect(() => {
+    // Check current session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+    });
+
+    // Listen for login/logout changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // IF NO SESSION, SHOW LOGIN SCREEN
+  if (!session) {
+    return (<Login />);
+  }
 
   // 1. This function MUST be inside the InventoryDashboard component
   async function handleAdjustment(sku: string, currentAdj: number, change: number) {
@@ -61,24 +81,37 @@ export default function InventoryDashboard() {
               </h1>
               <p className="text-slate-500 font-medium text-sm mt-1">Glorious Treats & Chews UK</p>
             </div>
-            <button 
-              onClick={triggerSync} 
-              className="bg-slate-900 hover:bg-slate-800 active:scale-95 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-slate-200 transition-all flex items-center gap-2"
-            >
-              {loading ? (
-                <span className="flex h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-              ) : 'Sync Amazon'}
-            </button>
-          </div>
 
-          {inventory[0]?.last_sync_at && (
-            <div className="bg-blue-50 border border-blue-100 px-3 py-2 rounded-lg flex items-center gap-2">
-              <div className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></div>
-              <p className="text-[10px] text-blue-700 font-bold uppercase tracking-widest">
-                Live Sync: {new Date(inventory[0].last_sync_at).toLocaleTimeString('en-GB')}
-              </p>
+            <div className="flex items-center gap-3">
+              {/* LOGOUT BUTTON */}
+              <button 
+                onClick={() => supabase.auth.signOut()}
+                className="text-slate-400 hover:text-red-500 transition-colors p-2"
+                title="Sign Out"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+              </button>
+
+              <button 
+                onClick={triggerSync} 
+                className="bg-slate-900 hover:bg-slate-800 active:scale-95 text-white px-5 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-slate-200 transition-all flex items-center gap-2"
+              >
+                {loading ? (
+                  <span className="flex h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                ) : 'Sync Amazon'}
+              </button>
             </div>
-          )}
+          </div>
+              {inventory[0]?.last_sync_at && (
+                <div className="bg-blue-50 border border-blue-100 px-3 py-2 rounded-lg flex items-center gap-2">
+                  <div className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></div>
+                  <p className="text-[10px] text-blue-700 font-bold uppercase tracking-widest">
+                    Live Sync: {new Date(inventory[0].last_sync_at).toLocaleTimeString('en-GB')}
+                  </p>
+                </div>
+              )}
         </header>
         
         {/* SEARCH BAR */}
