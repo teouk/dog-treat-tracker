@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase'; // Import the client we made in Step 4
 import Login from '@/components/Login';
 
@@ -9,9 +9,11 @@ export default function InventoryDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
 
   const [session, setSession] = useState<any>(null);
+  const [hasMounted, setHasMounted] = useState(false);
 
   useEffect(() => {
     // Check current session
+    setHasMounted(true); // Set to true once the browser loads
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
     });
@@ -25,6 +27,8 @@ export default function InventoryDashboard() {
   }, []);
 
   // IF NO SESSION, SHOW LOGIN SCREEN
+  if (!hasMounted) return null;
+  
   if (!session) {
     return (<Login />);
   }
