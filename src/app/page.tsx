@@ -1,39 +1,57 @@
 'use client';
-import { use, useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase'; // Import the client we made in Step 4
+
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
 import Login from '@/components/Login';
 
 export default function InventoryDashboard() {
+  // --- STATE ---
   const [inventory, setInventory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-
   const [session, setSession] = useState<any>(null);
   const [hasMounted, setHasMounted] = useState(false);
 
+  // --- INITIALIZATION & AUTH ---
   useEffect(() => {
-    // Check current session
-    setHasMounted(true); // Set to true once the browser loads
+    setHasMounted(true);
+
+    // Initial Session Check
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
+      if (session) fetchInitialData();
     });
 
-    // Listen for login/logout changes
+    // Listen for Auth Changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      if (session) fetchInitialData();
     });
 
-    return () => subscription.unsubscribe();
+    // Realtime Inventory Updates
+    const channel = supabase
+      .channel('inventory-updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
+        fetchInitialData();
+      })
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+      supabase.removeChannel(channel);
+    };
   }, []);
 
-  // IF NO SESSION, SHOW LOGIN SCREEN
-  if (!hasMounted) return null;
-  
-  if (!session) {
-    return (<Login />);
+  // --- ACTIONS ---
+  async function fetchInitialData() {
+    const { data } = await supabase
+      .from('inventory')
+      .select('*')
+      .order('product_name', { ascending: true });
+    if (data) setInventory(data);
+    setLoading(false);
   }
 
-  // 1. This function MUST be inside the InventoryDashboard component
   async function handleAdjustment(sku: string, currentAdj: number, change: number) {
     const { error } = await supabase
       .from('inventory')
@@ -43,36 +61,30 @@ export default function InventoryDashboard() {
     if (error) console.error('Update failed:', error);
   }
 
-  useEffect(() => {
-    fetchInitialData();
-    const channel = supabase
-      .channel('inventory-updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
-        fetchInitialData();
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, []);
-
-  async function fetchInitialData() {
-    const { data } = await supabase.from('inventory').select('*').order('product_name', { ascending: true });
-    if (data) setInventory(data);
-    setLoading(false);
-  }
-
   async function triggerSync() {
     setLoading(true);
     await fetch('/api/sync');
     setLoading(false);
   }
 
+  // --- FILTERING ---
   const filteredInventory = inventory.filter((item) => {
     const nameMatch = (item.product_name || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const skuMatch = item.sku.toLowerCase().includes(searchQuery.toLowerCase());
+    const skuMatch = (item.sku || '').toLowerCase().includes(searchQuery.toLowerCase());
     return nameMatch || skuMatch;
   });
 
-    return (
+  // --- HYDRATION SHIELD (Prevents Error #310) ---
+  if (!hasMounted) {
+    return <div className="min-h-screen bg-[#F8FAFC]" />;
+  }
+
+  // --- AUTH SHIELD ---
+  if (!session) {
+    return <Login />;
+  }
+
+  return (
     <main className="min-h-screen bg-[#F8FAFC] p-4 md:p-8 font-sans text-slate-900">
       <div className="max-w-2xl mx-auto">
         
@@ -93,7 +105,7 @@ export default function InventoryDashboard() {
                 className="text-slate-400 hover:text-red-500 transition-colors p-2"
                 title="Sign Out"
               >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                 </svg>
               </button>
@@ -108,14 +120,15 @@ export default function InventoryDashboard() {
               </button>
             </div>
           </div>
-              {inventory[0]?.last_sync_at && (
-                <div className="bg-blue-50 border border-blue-100 px-3 py-2 rounded-lg flex items-center gap-2">
-                  <div className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></div>
-                  <p className="text-[10px] text-blue-700 font-bold uppercase tracking-widest">
-                    Live Sync: {new Date(inventory[0].last_sync_at).toLocaleTimeString('en-GB')}
-                  </p>
-                </div>
-              )}
+
+          {inventory[0]?.last_sync_at && (
+            <div className="bg-blue-50 border border-blue-100 px-3 py-2 rounded-lg flex items-center gap-2">
+              <div className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></div>
+              <p className="text-[10px] text-blue-700 font-bold uppercase tracking-widest">
+                Live Sync: {new Date(inventory[0].last_sync_at).toLocaleTimeString('en-GB')}
+              </p>
+            </div>
+          )}
         </header>
         
         {/* SEARCH BAR */}
@@ -154,10 +167,10 @@ export default function InventoryDashboard() {
                       
                       {/* INBOUND STATUS BADGE */}
                       {item.amazon_inbound > 0 && (
-                        <div className="mt-3 inline-flex items-center gap-1.5 bg-orange-50 border border-orange-100 px-2.5 py-1 rounded-full">
+                        <div className="mt-3 inline-flex items-center gap-1.5 bg-orange-50 border border-orange-100 px-2.5 py-1 rounded-full text-orange-700">
                           <span className="w-1.5 h-1.5 bg-orange-500 rounded-full animate-bounce"></span>
-                          <span className="text-[10px] font-black text-orange-700 uppercase italic">
-                            {item.amazon_inbound} Arriving
+                          <span className="text-[10px] font-black uppercase italic tracking-tight">
+                            {item.amazon_inbound} Arriving at FBA
                           </span>
                         </div>
                       )}
@@ -176,7 +189,7 @@ export default function InventoryDashboard() {
                     {/* FBA ACTUALS */}
                     <div className="bg-slate-50 rounded-xl p-3">
                       <span className="block text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 text-center">FBA Stock</span>
-                      <span className="block text-xl font-bold text-slate-700 text-center">{item.amazon_fulfillable}</span>
+                      <span className="block text-xl font-bold text-slate-700 text-center">{item.amazon_fulfillable || 0}</span>
                     </div>
 
                     {/* MANUAL CONTROLS */}
@@ -190,7 +203,7 @@ export default function InventoryDashboard() {
                           -
                         </button>
                         <div className="w-8 text-center font-bold text-slate-700 text-sm">
-                          {item.manual_adjustment > 0 ? `+${item.manual_adjustment}` : item.manual_adjustment}
+                          {item.manual_adjustment > 0 ? `+${item.manual_adjustment}` : (item.manual_adjustment || 0)}
                         </div>
                         <button 
                           onClick={() => handleAdjustment(item.sku, item.manual_adjustment, 1)}
@@ -205,6 +218,14 @@ export default function InventoryDashboard() {
               </div>
             );
           })}
+
+          {/* NO RESULTS STATE */}
+          {filteredInventory.length === 0 && !loading && (
+            <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-slate-200">
+              <p className="text-slate-400 font-medium">No dog treats found matching "{searchQuery}"</p>
+              <button onClick={() => setSearchQuery('')} className="mt-4 text-blue-600 font-bold text-sm">Clear search</button>
+            </div>
+          )}
         </div>
       </div>
     </main>
