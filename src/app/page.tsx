@@ -63,7 +63,17 @@ export default function InventoryDashboard() {
 
   async function triggerSync() {
     setLoading(true);
-    await fetch('/api/sync');
+    try {
+      // Adding a timestamp (?t=...) forces the browser to bypass any old saved data
+      const response = await fetch(`/api/sync?t=${Date.now()}`);
+      if (response.ok) {
+        console.log("✅ Sync successful");
+        // Give Supabase 1 second to breathe before refreshing the UI
+        setTimeout(() => fetchInitialData(), 1000);
+      }
+    } catch (error) {
+      console.error("Sync failed:", error);
+    }
     setLoading(false);
   }
 
