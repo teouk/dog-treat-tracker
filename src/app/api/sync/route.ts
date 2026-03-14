@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchAmazonInventory } from '@/lib/amazon';
 import { createClient } from '@supabase/supabase-js';
 
-// Initialize Supabase (Use service role key for backend sync)
+// Initialize Supabase with Service Role Key to ensure it has "God Mode" for syncing
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -11,38 +11,60 @@ const supabase = createClient(
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization');
-
-  // 1. Check if it's the official Vercel Cron request
-  const isCronRequest = authHeader === `Bearer ${process.env.CRON_SECRET}`;
-
-  // 2. Check if it's a manual request from your own domain
-  // (Vercel adds the 'referer' header automatically)
+  const userAgent = request.headers.get('user-agent');
   const referer = request.headers.get('referer');
-  const isManualRequest = referer && referer.includes(process.env.NEXT_PUBLIC_SUPABASE_URL?.split('.')[0] || '');
 
-  // If it's neither, block it to save your Amazon API limits
-  if (!isCronRequest && !isManualRequest && process.env.NODE_ENV === 'production') {
-    return new NextResponse('Unauthorized', { status: 401 });
+  // 1. Check for Vercel Cron
+  const isCron = authHeader === `Bearer ${process.env.CRON_SECRET}` || userAgent?.includes('vercel-cron');
+
+  // 2. Check for Manual Sync (Checking if request comes from YOUR app domain)
+  // We check if the referer exists and isn't a random outside site
+  const isManual = referer && (
+    referer.includes('localhost') || 
+    referer.includes('vercel.app') || 
+    referer.includes('glorious-dog-chews') // Add your specific project name slug here
+  );
+
+  // LOG FOR DEBUGGING (You can see this in Vercel Dashboard > Logs)
+  console.log(`Sync attempt - Cron: ${isCron}, Manual: ${isManual}, Referer: ${referer}`);
+
+  if (!isCron && !isManual && process.env.NODE_ENV === 'production') {
+    return new NextResponse('Unauthorized: Security Block', { status: 401 });
   }
 
   try {
     const liveData = await fetchAmazonInventory();
 
+    if (!liveData || liveData.length === 0) {
+      throw new Error("Amazon returned no items. Check API permissions.");
+    }
+
+    // Capture the exact moment of sync
+    const syncTime = new Date().toISOString();
+
     // Loop through each item from Amazon and update our DB
     for (const item of liveData) {
-      await supabase
+      const { error } = await supabase
         .from('inventory')
         .upsert({
           sku: item.sku,
           product_name: item.product_name,
           amazon_fulfillable: item.fulfillable,
           amazon_inbound: item.inbound,
-          last_sync_at: new Date().toISOString(),
+          last_sync_at: syncTime, // Use the same timestamp for the whole batch
         }, { onConflict: 'sku' });
+        
+      if (error) console.error(`Supabase Error for SKU ${item.sku}:`, error.message);
     }
 
-    return NextResponse.json({ success: true, message: 'Inventory Synced!' });
+    return NextResponse.json({ 
+      success: true, 
+      count: liveData.length,
+      timestamp: syncTime 
+    });
+
   } catch (error: any) {
+    console.error("Sync Route Crash:", error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
