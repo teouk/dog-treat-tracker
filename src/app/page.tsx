@@ -2,6 +2,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import Login from '@/components/Login';
+import ThemeToggle from '@/components/ThemeToggle';
 
 type InventoryItem = {
   sku: string;
@@ -31,7 +32,7 @@ function ShopStockEditor({ value, onSave }: { value: number; onSave: (v: number)
         type="number"
         min="0"
         autoFocus
-        className="w-16 text-center font-semibold text-emerald-600 border border-emerald-300 rounded-md py-0.5 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
+        className="w-16 text-center font-semibold text-emerald-600 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-800 rounded-md py-0.5 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
@@ -42,29 +43,29 @@ function ShopStockEditor({ value, onSave }: { value: number; onSave: (v: number)
 
   return (
     <div className="inline-flex items-center gap-1.5">
-      <button onClick={() => onSave(Math.max(0, value - 1))} className="w-6 h-6 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors flex items-center justify-center text-sm font-bold">-</button>
+      <button onClick={() => onSave(Math.max(0, value - 1))} className="w-6 h-6 rounded-md border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors flex items-center justify-center text-sm font-bold">-</button>
       <button
         onClick={() => { setDraft(String(value)); setEditing(true); }}
-        className="font-semibold text-emerald-600 w-8 text-center hover:bg-emerald-50 rounded cursor-text"
+        className="font-semibold text-emerald-600 dark:text-emerald-400 w-8 text-center hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded cursor-text"
         title="Click to set exact amount"
       >{value}</button>
-      <button onClick={() => onSave(value + 1)} className="w-6 h-6 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors flex items-center justify-center text-sm font-bold">+</button>
+      <button onClick={() => onSave(value + 1)} className="w-6 h-6 rounded-md border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors flex items-center justify-center text-sm font-bold">+</button>
     </div>
   );
 }
 
 function StockBadge({ total }: { total: number }) {
-  if (total === 0) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">Out of Stock</span>;
-  if (total <= LOW_STOCK_THRESHOLD) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">Low Stock</span>;
-  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">In Stock</span>;
+  if (total === 0) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400">Out of Stock</span>;
+  if (total <= LOW_STOCK_THRESHOLD) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Low Stock</span>;
+  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400">In Stock</span>;
 }
 
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   const colors: Record<string, string> = {
-    slate: 'bg-white border-slate-200 text-slate-900',
-    emerald: 'bg-emerald-50 border-emerald-200 text-emerald-700',
-    amber: 'bg-amber-50 border-amber-200 text-amber-700',
-    red: 'bg-red-50 border-red-200 text-red-700',
+    slate: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100',
+    emerald: 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400',
+    amber: 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400',
+    red: 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400',
   };
   return (
     <div className={`rounded-2xl border p-4 ${colors[color]}`}>
@@ -178,23 +179,23 @@ export default function InventoryDashboard() {
   }, [inventory, searchQuery, filter]);
 
   if (status === 'loading') return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50">
-      <div className="w-6 h-6 border-2 border-slate-300 border-t-slate-800 rounded-full animate-spin" />
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
+      <div className="w-6 h-6 border-2 border-slate-300 dark:border-slate-700 border-t-slate-800 dark:border-t-slate-200 rounded-full animate-spin" />
     </div>
   );
   if (status === 'unauthenticated') return <Login />;
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h1 className="text-lg font-black tracking-tight text-slate-900">
-              Treat Tracker <span className="text-blue-600">Pro</span>
+            <h1 className="text-lg font-black tracking-tight text-slate-900 dark:text-slate-100">
+              Treat Tracker <span className="text-blue-600 dark:text-blue-400">Pro</span>
             </h1>
             {syncStatus && (
-              <span className="hidden sm:inline text-xs font-medium text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">
+              <span className="hidden sm:inline text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2.5 py-1 rounded-full">
                 {syncStatus}
               </span>
             )}
@@ -211,9 +212,10 @@ export default function InventoryDashboard() {
                 <><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg> Sync Amazon</>
               )}
             </button>
+            <ThemeToggle />
             <button
               onClick={() => signOut()}
-              className="text-slate-400 hover:text-slate-600 p-2 rounded-lg hover:bg-slate-100 transition-colors"
+              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title="Sign out"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
@@ -221,7 +223,7 @@ export default function InventoryDashboard() {
           </div>
         </div>
         {syncStatus && (
-          <div className="sm:hidden bg-blue-50 px-4 py-2 text-xs font-medium text-blue-600 text-center">
+          <div className="sm:hidden bg-blue-50 dark:bg-blue-900/30 px-4 py-2 text-xs font-medium text-blue-600 dark:text-blue-400 text-center">
             {syncStatus}
           </div>
         )}
@@ -243,23 +245,23 @@ export default function InventoryDashboard() {
             <input
               type="text"
               placeholder="Search by product name or SKU..."
-              className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+              className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
             {searchQuery && (
-              <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+              <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             )}
           </div>
-          <div className="flex gap-1.5 bg-slate-100 p-1 rounded-lg self-start">
+          <div className="flex gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg self-start">
             {([['all', 'All'], ['low', 'Low Stock'], ['out', 'No Stock']] as const).map(([key, label]) => (
               <button
                 key={key}
                 onClick={() => setFilter(key)}
                 className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-                  filter === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  filter === key ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
                 }`}
               >
                 {label}
@@ -270,44 +272,44 @@ export default function InventoryDashboard() {
 
         {/* Last sync info */}
         {lastSync && (
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-slate-400 dark:text-slate-500">
             Last synced: {lastSync.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} at {lastSync.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
           </p>
         )}
 
         {/* Inventory Table — Desktop */}
-        <div className="hidden md:block bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="hidden md:block bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-100 bg-slate-50/50">
-                <th className="text-left py-3 px-4 font-semibold text-slate-500 text-xs uppercase tracking-wider">Product</th>
-                <th className="text-center py-3 px-3 font-semibold text-slate-500 text-xs uppercase tracking-wider">Amazon FBA</th>
-                <th className="text-center py-3 px-3 font-semibold text-slate-500 text-xs uppercase tracking-wider">Amazon FBM</th>
-                <th className="text-center py-3 px-3 font-semibold text-slate-500 text-xs uppercase tracking-wider">Shop</th>
-                <th className="text-center py-3 px-3 font-semibold text-slate-500 text-xs uppercase tracking-wider">Total</th>
-                <th className="text-center py-3 px-3 font-semibold text-slate-500 text-xs uppercase tracking-wider">Status</th>
+              <tr className="border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50">
+                <th className="text-left py-3 px-4 font-semibold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Product</th>
+                <th className="text-center py-3 px-3 font-semibold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Amazon FBA</th>
+                <th className="text-center py-3 px-3 font-semibold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Amazon FBM</th>
+                <th className="text-center py-3 px-3 font-semibold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Shop</th>
+                <th className="text-center py-3 px-3 font-semibold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Total</th>
+                <th className="text-center py-3 px-3 font-semibold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
+            <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
               {filtered.map(item => {
                 const total = (item.fba_quantity || 0) + (item.fbm_quantity || 0) + (item.shop_stock || 0);
                 return (
-                  <tr key={item.sku} className="hover:bg-slate-50/50 transition-colors">
+                  <tr key={item.sku} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="py-3 px-4">
-                      <p className="font-semibold text-slate-800 leading-tight">{item.product_name || '—'}</p>
-                      <p className="text-xs text-slate-400 mt-0.5 font-mono">{item.sku}</p>
+                      <p className="font-semibold text-slate-800 dark:text-slate-200 leading-tight">{item.product_name || '—'}</p>
+                      <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5 font-mono">{item.sku}</p>
                     </td>
                     <td className="text-center py-3 px-3">
-                      <span className="font-semibold text-orange-600">{item.fba_quantity || 0}</span>
+                      <span className="font-semibold text-orange-600 dark:text-orange-400">{item.fba_quantity || 0}</span>
                     </td>
                     <td className="text-center py-3 px-3">
-                      <span className="font-semibold text-blue-600">{item.fbm_quantity || 0}</span>
+                      <span className="font-semibold text-blue-600 dark:text-blue-400">{item.fbm_quantity || 0}</span>
                     </td>
                     <td className="text-center py-3 px-3">
                       <ShopStockEditor value={item.shop_stock || 0} onSave={(v) => setShopStock(item.sku, v)} />
                     </td>
                     <td className="text-center py-3 px-3">
-                      <span className={`font-bold text-lg ${total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-800'}`}>
+                      <span className={`font-bold text-lg ${total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-800 dark:text-slate-200'}`}>
                         {total}
                       </span>
                     </td>
@@ -320,7 +322,7 @@ export default function InventoryDashboard() {
             </tbody>
           </table>
           {filtered.length === 0 && (
-            <div className="py-12 text-center text-slate-400 text-sm">
+            <div className="py-12 text-center text-slate-400 dark:text-slate-500 text-sm">
               {fetching ? 'Loading inventory...' : inventory.length === 0 ? 'No products yet. Click "Sync Amazon" to import your inventory.' : 'No products match your search.'}
             </div>
           )}
@@ -331,27 +333,27 @@ export default function InventoryDashboard() {
           {filtered.map(item => {
             const total = (item.fba_quantity || 0) + (item.fbm_quantity || 0) + (item.shop_stock || 0);
             return (
-              <div key={item.sku} className={`bg-white rounded-xl border p-4 ${total === 0 ? 'border-red-200' : total <= LOW_STOCK_THRESHOLD ? 'border-amber-200' : 'border-slate-200'}`}>
+              <div key={item.sku} className={`bg-white dark:bg-slate-900 rounded-xl border p-4 ${total === 0 ? 'border-red-200 dark:border-red-800' : total <= LOW_STOCK_THRESHOLD ? 'border-amber-200 dark:border-amber-800' : 'border-slate-200 dark:border-slate-800'}`}>
                 <div className="flex justify-between items-start mb-3">
                   <div className="flex-1 min-w-0 mr-3">
-                    <p className="font-semibold text-slate-800 text-sm leading-tight truncate">{item.product_name || '—'}</p>
-                    <p className="text-xs text-slate-400 font-mono mt-0.5">{item.sku}</p>
+                    <p className="font-semibold text-slate-800 dark:text-slate-200 text-sm leading-tight truncate">{item.product_name || '—'}</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 font-mono mt-0.5">{item.sku}</p>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className={`text-2xl font-black ${total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-800'}`}>{total}</p>
+                    <p className={`text-2xl font-black ${total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-800 dark:text-slate-200'}`}>{total}</p>
                     <StockBadge total={total} />
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-center">
-                  <div className="bg-orange-50 rounded-lg py-2">
+                  <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg py-2">
                     <p className="text-[10px] font-bold text-orange-400 uppercase">FBA</p>
-                    <p className="font-bold text-orange-700 text-sm">{item.fba_quantity || 0}</p>
+                    <p className="font-bold text-orange-700 dark:text-orange-400 text-sm">{item.fba_quantity || 0}</p>
                   </div>
-                  <div className="bg-blue-50 rounded-lg py-2">
+                  <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg py-2">
                     <p className="text-[10px] font-bold text-blue-400 uppercase">FBM</p>
-                    <p className="font-bold text-blue-700 text-sm">{item.fbm_quantity || 0}</p>
+                    <p className="font-bold text-blue-700 dark:text-blue-400 text-sm">{item.fbm_quantity || 0}</p>
                   </div>
-                  <div className="bg-emerald-50 rounded-lg py-2">
+                  <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg py-2">
                     <p className="text-[10px] font-bold text-emerald-400 uppercase">Shop</p>
                     <div className="flex items-center justify-center mt-0.5">
                       <ShopStockEditor value={item.shop_stock || 0} onSave={(v) => setShopStock(item.sku, v)} />
@@ -362,7 +364,7 @@ export default function InventoryDashboard() {
             );
           })}
           {filtered.length === 0 && (
-            <div className="py-12 text-center text-slate-400 text-sm">
+            <div className="py-12 text-center text-slate-400 dark:text-slate-500 text-sm">
               {fetching ? 'Loading inventory...' : inventory.length === 0 ? 'No products yet. Tap "Sync Amazon" to import your inventory.' : 'No products match your search.'}
             </div>
           )}
