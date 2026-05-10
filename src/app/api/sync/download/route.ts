@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
   const token = await getAccessToken();
   const marketplaceId = 'A1F83G8C2ARO7P';
 
-  const fbaMap = new Map<string, number>();
+  const fbaMap = new Map<string, { qty: number; name: string }>();
 
   try {
     let nextToken: string | null = null;
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
       fbaData.payload?.inventorySummaries?.forEach((item: any) => {
         const sku = item.sellerSku.trim().toUpperCase();
         const qty = item.inventoryDetails?.fulfillableQuantity || 0;
-        fbaMap.set(sku, qty);
+        fbaMap.set(sku, { qty, name: item.productName || '' });
       });
 
       nextToken = fbaData.pagination?.nextToken ?? null;
@@ -70,10 +70,12 @@ export async function GET(request: NextRequest) {
     if (!rawSku) continue;
     if (itemStatus === 'Inactive' || itemStatus === 'Closed' || itemStatus === 'Deleted') continue;
 
-    const productName = (cols[headers.indexOf('item-name')] || '').trim();
+    const fbaData = fbaMap.get(rawSku.toUpperCase());
+    const reportName = (cols[headers.indexOf('item-name')] || '').trim();
+    const productName = reportName || fbaData?.name || '';
     const channel = (cols[headers.indexOf('fulfillment-channel')] || '').trim();
     const fbmQty = channel === 'DEFAULT' ? parseInt(cols[headers.indexOf('quantity')] || '0', 10) : 0;
-    const fbaQty = fbaMap.get(rawSku.toUpperCase()) || 0;
+    const fbaQty = fbaData?.qty || 0;
 
     await sql`
       INSERT INTO inventory (sku, product_name, fbm_quantity, fba_quantity, last_sync_at)

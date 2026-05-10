@@ -14,6 +14,45 @@ type InventoryItem = {
 
 const LOW_STOCK_THRESHOLD = 10;
 
+function ShopStockEditor({ value, onSave }: { value: number; onSave: (v: number) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(value));
+
+  function commit() {
+    const parsed = parseInt(draft, 10);
+    if (!isNaN(parsed) && parsed >= 0) onSave(parsed);
+    else setDraft(String(value));
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <input
+        type="number"
+        min="0"
+        autoFocus
+        className="w-16 text-center font-semibold text-emerald-600 border border-emerald-300 rounded-md py-0.5 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setDraft(String(value)); setEditing(false); } }}
+      />
+    );
+  }
+
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      <button onClick={() => onSave(Math.max(0, value - 1))} className="w-6 h-6 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors flex items-center justify-center text-sm font-bold">-</button>
+      <button
+        onClick={() => { setDraft(String(value)); setEditing(true); }}
+        className="font-semibold text-emerald-600 w-8 text-center hover:bg-emerald-50 rounded cursor-text"
+        title="Click to set exact amount"
+      >{value}</button>
+      <button onClick={() => onSave(value + 1)} className="w-6 h-6 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors flex items-center justify-center text-sm font-bold">+</button>
+    </div>
+  );
+}
+
 function StockBadge({ total }: { total: number }) {
   if (total === 0) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">Out of Stock</span>;
   if (total <= LOW_STOCK_THRESHOLD) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">Low Stock</span>;
@@ -89,8 +128,7 @@ export default function InventoryDashboard() {
     setLoading(false);
   }
 
-  async function adjustShopStock(sku: string, current: number, change: number) {
-    const newStock = Math.max(0, (current || 0) + change);
+  async function setShopStock(sku: string, newStock: number) {
     setInventory(prev => prev.map(i => i.sku === sku ? { ...i, shop_stock: newStock } : i));
     await fetch(`/api/inventory/${encodeURIComponent(sku)}`, {
       method: 'PATCH',
@@ -266,17 +304,7 @@ export default function InventoryDashboard() {
                       <span className="font-semibold text-blue-600">{item.fbm_quantity || 0}</span>
                     </td>
                     <td className="text-center py-3 px-3">
-                      <div className="inline-flex items-center gap-1.5">
-                        <button
-                          onClick={() => adjustShopStock(item.sku, item.shop_stock, -1)}
-                          className="w-6 h-6 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors flex items-center justify-center text-sm font-bold"
-                        >-</button>
-                        <span className="font-semibold text-emerald-600 w-8 text-center">{item.shop_stock || 0}</span>
-                        <button
-                          onClick={() => adjustShopStock(item.sku, item.shop_stock, 1)}
-                          className="w-6 h-6 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors flex items-center justify-center text-sm font-bold"
-                        >+</button>
-                      </div>
+                      <ShopStockEditor value={item.shop_stock || 0} onSave={(v) => setShopStock(item.sku, v)} />
                     </td>
                     <td className="text-center py-3 px-3">
                       <span className={`font-bold text-lg ${total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-800'}`}>
@@ -325,10 +353,8 @@ export default function InventoryDashboard() {
                   </div>
                   <div className="bg-emerald-50 rounded-lg py-2">
                     <p className="text-[10px] font-bold text-emerald-400 uppercase">Shop</p>
-                    <div className="flex items-center justify-center gap-1.5 mt-0.5">
-                      <button onClick={() => adjustShopStock(item.sku, item.shop_stock, -1)} className="w-6 h-6 rounded border border-emerald-200 text-emerald-600 font-bold text-sm flex items-center justify-center">-</button>
-                      <span className="font-bold text-emerald-700 text-sm w-6 text-center">{item.shop_stock || 0}</span>
-                      <button onClick={() => adjustShopStock(item.sku, item.shop_stock, 1)} className="w-6 h-6 rounded border border-emerald-200 text-emerald-600 font-bold text-sm flex items-center justify-center">+</button>
+                    <div className="flex items-center justify-center mt-0.5">
+                      <ShopStockEditor value={item.shop_stock || 0} onSave={(v) => setShopStock(item.sku, v)} />
                     </div>
                   </div>
                 </div>
