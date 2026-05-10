@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAccessToken } from '@/lib/amazon';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+import { auth } from '@/auth';
+import { getDb } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const docId = request.nextUrl.searchParams.get('reportDocumentId');
   const token = await getAccessToken();
   const marketplaceId = 'A1F83G8C2ARO7P';
@@ -50,6 +52,7 @@ export async function GET(request: NextRequest) {
   const syncTime = new Date().toISOString();
 
   // 3. MERGE & FILTER
+  const sql = getDb();
   for (const line of lines.slice(1)) {
     if (!line.trim()) continue;
     const cols = line.split('\t');
@@ -66,13 +69,15 @@ export async function GET(request: NextRequest) {
     const fbmQty = channel === 'DEFAULT' ? parseInt(cols[headers.indexOf('quantity')] || '0') : 0;
     const fbaQty = fbaMap.get(cleanSku) || 0;
 
-    await supabase.from('inventory').upsert({
-      sku: rawSku.trim(),
-      product_name: productName,
-      fbm_quantity: fbmQty,
-      fba_quantity: fbaQty,
-      last_sync_at: syncTime
-    }, { onConflict: 'sku' });
+    await sql`
+      INSERT INTO inventory (sku, product_name, fbm_quantity, fba_quantity, last_sync_at)
+      VALUES (${rawSku.trim()}, ${productName}, ${fbmQty}, ${fbaQty}, ${syncTime})
+      ON CONFLICT (sku) DO UPDATE SET
+        product_name = EXCLUDED.product_name,
+        fbm_quantity = EXCLUDED.fbm_quantity,
+        fba_quantity = EXCLUDED.fba_quantity,
+        last_sync_at = EXCLUDED.last_sync_at
+    `;
   }
 
   return NextResponse.json({ success: true, total_fba_mapped: fbaMap.size });

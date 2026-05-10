@@ -1,13 +1,7 @@
 export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchAmazonInventory } from '@/lib/amazon';
-import { createClient } from '@supabase/supabase-js';
-
-// Initialize Supabase with Service Role Key to ensure it has "God Mode" for syncing
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+import { getDb } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization');
@@ -42,19 +36,16 @@ export async function GET(request: NextRequest) {
     // Capture the exact moment of sync
     const syncTime = new Date().toISOString();
 
-    // Loop through each item from Amazon and update our DB
+    const sql = getDb();
     for (const item of liveData) {
-      const { error } = await supabase
-        .from('inventory')
-        .upsert({
-          sku: item.sku,
-          product_name: item.product_name,
-          amazon_fulfillable: item.fulfillable,
-          amazon_inbound: item.inbound,
-          last_sync_at: syncTime, // Use the same timestamp for the whole batch
-        }, { onConflict: 'sku' });
-        
-      if (error) console.error(`Supabase Error for SKU ${item.sku}:`, error.message);
+      await sql`
+        INSERT INTO inventory (sku, product_name, fba_quantity, last_sync_at)
+        VALUES (${item.sku}, ${item.product_name}, ${item.fulfillable}, ${syncTime})
+        ON CONFLICT (sku) DO UPDATE SET
+          product_name = EXCLUDED.product_name,
+          fba_quantity = EXCLUDED.fba_quantity,
+          last_sync_at = EXCLUDED.last_sync_at
+      `;
     }
 
     return NextResponse.json({ 

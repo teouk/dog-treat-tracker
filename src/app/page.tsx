@@ -1,26 +1,23 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useSession, signOut } from 'next-auth/react';
 import Login from '@/components/Login';
 
 export default function InventoryDashboard() {
+  const { data: session, status } = useSession();
   const [inventory, setInventory] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [session, setSession] = useState<any>(null);
-  const [hasMounted, setHasMounted] = useState(false);
 
   useEffect(() => {
-    setHasMounted(true);
-    supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
-    supabase.auth.onAuthStateChange((_event, session) => setSession(session));
-    fetchInitialData();
-  }, []);
+    if (status === 'authenticated') fetchInventory();
+  }, [status]);
 
-  async function fetchInitialData() {
-    const { data } = await supabase.from('inventory').select('*').order('product_name', { ascending: true });
-    if (data) setInventory(data);
+  async function fetchInventory() {
+    const res = await fetch('/api/inventory');
+    const data = await res.json();
+    if (Array.isArray(data)) setInventory(data);
   }
 
   // --- THE NEW 3-STEP SYNC ---
@@ -46,7 +43,7 @@ export default function InventoryDashboard() {
       if (ready) {
         setSyncStatus('Downloading Data...');
         await fetch(`/api/sync/download?reportDocumentId=${docId}`);
-        await fetchInitialData();
+        await fetchInventory();
         setSyncStatus('');
       } else {
         alert("Amazon is busy. Try again in 2 minutes.");
@@ -58,12 +55,17 @@ export default function InventoryDashboard() {
   }
 
   async function adjustShopStock(sku: string, current: number, change: number) {
-    await supabase.from('inventory').update({ shop_stock: (current || 0) + change }).eq('sku', sku);
-    fetchInitialData();
+    const newStock = (current || 0) + change;
+    await fetch(`/api/inventory/${encodeURIComponent(sku)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shop_stock: newStock }),
+    });
+    fetchInventory();
   }
 
-  if (!hasMounted) return null;
-  if (!session) return <Login />;
+  if (status === 'loading') return null;
+  if (status === 'unauthenticated') return <Login />;
 
   const filtered = inventory.filter(i => 
     (i.product_name || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -78,9 +80,14 @@ export default function InventoryDashboard() {
             <h1 className="text-2xl font-black italic">TREAT TRACKER <span className="text-blue-600">PRO</span></h1>
             <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">{syncStatus || 'Ready'}</p>
           </div>
-          <button onClick={triggerSync} disabled={loading} className="bg-slate-900 text-white px-6 py-2 rounded-xl font-bold text-sm shadow-lg disabled:opacity-50">
-            {loading ? 'Syncing...' : 'Sync Amazon'}
-          </button>
+          <div className="flex gap-2">
+            <button onClick={triggerSync} disabled={loading} className="bg-slate-900 text-white px-6 py-2 rounded-xl font-bold text-sm shadow-lg disabled:opacity-50">
+              {loading ? 'Syncing...' : 'Sync Amazon'}
+            </button>
+            <button onClick={() => signOut()} className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl font-bold text-sm hover:bg-slate-200 transition-all">
+              Sign Out
+            </button>
+          </div>
         </header>
 
         <input 
