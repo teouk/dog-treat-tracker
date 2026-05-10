@@ -8,77 +8,77 @@ export async function GET(request: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const docId = request.nextUrl.searchParams.get('reportDocumentId');
+  if (!docId) return NextResponse.json({ error: 'Missing reportDocumentId' }, { status: 400 });
+
   const token = await getAccessToken();
   const marketplaceId = 'A1F83G8C2ARO7P';
 
-  const fbaMap = new Map();
+  const fbaMap = new Map<string, number>();
 
-  // 1. FETCH ALL FBA PAGES (Handling Pagination)
   try {
-    let nextToken = null;
+    let nextToken: string | null = null;
     do {
-      const url: string = nextToken 
-        ? `https://sellingpartnerapi-eu.amazon.com/fba/inventory/v1/summaries?details=true&granularityType=Marketplace&granularityId=${marketplaceId}&marketplaceIds=${marketplaceId}&nextToken=${nextToken}`
+      const url: string = nextToken
+        ? `https://sellingpartnerapi-eu.amazon.com/fba/inventory/v1/summaries?details=true&granularityType=Marketplace&granularityId=${marketplaceId}&marketplaceIds=${marketplaceId}&nextToken=${encodeURIComponent(nextToken)}`
         : `https://sellingpartnerapi-eu.amazon.com/fba/inventory/v1/summaries?details=true&granularityType=Marketplace&granularityId=${marketplaceId}&marketplaceIds=${marketplaceId}`;
 
       const fbaRes = await fetch(url, { headers: { 'x-amz-access-token': token } });
       const fbaData = await fbaRes.json();
-      
+
       fbaData.payload?.inventorySummaries?.forEach((item: any) => {
-        const cleanSku = item.sellerSku.trim().toUpperCase();
+        const sku = item.sellerSku.trim().toUpperCase();
         const qty = item.inventoryDetails?.fulfillableQuantity || 0;
-        fbaMap.set(cleanSku, qty);
+        fbaMap.set(sku, qty);
       });
 
-      // Check if there is another page
-      nextToken = fbaData.pagination?.nextToken;
-      
-    } while (nextToken); // Keep going as long as Amazon says "there's more"
+      nextToken = fbaData.pagination?.nextToken ?? null;
+    } while (nextToken);
 
-    console.log(`Success: Mapped ${fbaMap.size} total FBA SKUs across all pages.`);
+    console.log(`[sync/download] Mapped ${fbaMap.size} FBA SKUs`);
   } catch (err) {
-    console.error("FBA Fetch Error:", err);
+    console.error('[sync/download] FBA fetch error:', err);
   }
 
-  // 2. GET LISTINGS REPORT (Your Master SKU List)
   const docRes = await fetch(`https://sellingpartnerapi-eu.amazon.com/reports/2021-06-30/documents/${docId}`, {
-    headers: { 'x-amz-access-token': token }
+    headers: { 'x-amz-access-token': token },
   });
   const { url } = await docRes.json();
   const fileRes = await fetch(url);
-  const text = await fileRes.text();
+  const raw = await fileRes.text();
+  const text = raw.replace(/\r/g, '');
   const lines = text.split('\n');
   const headers = lines[0].split('\t');
   const syncTime = new Date().toISOString();
 
-  // 3. MERGE & FILTER
   const sql = getDb();
+  let upserted = 0;
+
   for (const line of lines.slice(1)) {
     if (!line.trim()) continue;
     const cols = line.split('\t');
-    const status = cols[headers.indexOf('status')];
-    const rawSku = cols[headers.indexOf('seller-sku')] || '';
-    const cleanSku = rawSku.trim().toUpperCase();
+    const itemStatus = cols[headers.indexOf('status')]?.trim();
+    const rawSku = (cols[headers.indexOf('seller-sku')] || '').trim();
 
-    // Skip Inactive/Suppressed
-    if (status === 'Inactive' || status === 'Closed' || status === 'Deleted') continue;
+    if (!rawSku) continue;
+    if (itemStatus === 'Inactive' || itemStatus === 'Closed' || itemStatus === 'Deleted') continue;
 
-    const productName = cols[headers.indexOf('item-name')];
-    const channel = cols[headers.indexOf('fulfillment-channel')];
-    
-    const fbmQty = channel === 'DEFAULT' ? parseInt(cols[headers.indexOf('quantity')] || '0') : 0;
-    const fbaQty = fbaMap.get(cleanSku) || 0;
+    const productName = (cols[headers.indexOf('item-name')] || '').trim();
+    const channel = (cols[headers.indexOf('fulfillment-channel')] || '').trim();
+    const fbmQty = channel === 'DEFAULT' ? parseInt(cols[headers.indexOf('quantity')] || '0', 10) : 0;
+    const fbaQty = fbaMap.get(rawSku.toUpperCase()) || 0;
 
     await sql`
       INSERT INTO inventory (sku, product_name, fbm_quantity, fba_quantity, last_sync_at)
-      VALUES (${rawSku.trim()}, ${productName}, ${fbmQty}, ${fbaQty}, ${syncTime})
+      VALUES (${rawSku}, ${productName}, ${fbmQty}, ${fbaQty}, ${syncTime})
       ON CONFLICT (sku) DO UPDATE SET
         product_name = EXCLUDED.product_name,
         fbm_quantity = EXCLUDED.fbm_quantity,
         fba_quantity = EXCLUDED.fba_quantity,
         last_sync_at = EXCLUDED.last_sync_at
     `;
+    upserted++;
   }
 
-  return NextResponse.json({ success: true, total_fba_mapped: fbaMap.size });
+  console.log(`[sync/download] Upserted ${upserted} items, FBA mapped: ${fbaMap.size}`);
+  return NextResponse.json({ success: true, upserted, total_fba_mapped: fbaMap.size });
 }
