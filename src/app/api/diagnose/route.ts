@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { gunzipSync } from 'node:zlib';
 import { auth } from '@/auth';
 import { getAccessToken } from '@/lib/amazon';
 import { getDb } from '@/lib/db';
@@ -96,8 +97,15 @@ export async function GET() {
         );
         const docData = await docRes.json();
         const fileRes = await fetch(docData.url);
-        const raw = await fileRes.text();
-        const text = raw.replace(/\r/g, '');
+
+        let text: string;
+        if (docData.compressionAlgorithm === 'GZIP') {
+          const buffer = Buffer.from(await fileRes.arrayBuffer());
+          text = gunzipSync(buffer).toString('utf-8');
+        } else {
+          text = await fileRes.text();
+        }
+        text = text.replace(/\r/g, '');
         const lines = text.split('\n').filter(l => l.trim());
         const headers = lines[0]?.split('\t') || [];
 

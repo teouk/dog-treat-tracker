@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { gunzipSync } from 'node:zlib';
 import { getAccessToken } from '@/lib/amazon';
 import { auth } from '@/auth';
 import { getDb } from '@/lib/db';
@@ -42,10 +43,17 @@ export async function GET(request: NextRequest) {
   const docRes = await fetch(`https://sellingpartnerapi-eu.amazon.com/reports/2021-06-30/documents/${docId}`, {
     headers: { 'x-amz-access-token': token },
   });
-  const { url } = await docRes.json();
-  const fileRes = await fetch(url);
-  const raw = await fileRes.text();
-  const text = raw.replace(/\r/g, '');
+  const docData = await docRes.json();
+  const fileRes = await fetch(docData.url);
+
+  let text: string;
+  if (docData.compressionAlgorithm === 'GZIP') {
+    const buffer = Buffer.from(await fileRes.arrayBuffer());
+    text = gunzipSync(buffer).toString('utf-8');
+  } else {
+    text = await fileRes.text();
+  }
+  text = text.replace(/\r/g, '');
   const lines = text.split('\n');
   const headers = lines[0].split('\t');
   const syncTime = new Date().toISOString();
