@@ -13,7 +13,15 @@ type InventoryItem = {
   last_sync_at: string | null;
 };
 
+type FilterKey = 'all' | 'in' | 'low' | 'out';
+
 const LOW_STOCK_THRESHOLD = 10;
+
+function statusOf(total: number): 'in' | 'low' | 'out' {
+  if (total === 0) return 'out';
+  if (total <= LOW_STOCK_THRESHOLD) return 'low';
+  return 'in';
+}
 
 function ShopStockEditor({ value, onSave }: { value: number; onSave: (v: number) => void }) {
   const [editing, setEditing] = useState(false);
@@ -55,34 +63,44 @@ function ShopStockEditor({ value, onSave }: { value: number; onSave: (v: number)
 }
 
 function StockBadge({ total }: { total: number }) {
-  if (total === 0) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400">Out of Stock</span>;
-  if (total <= LOW_STOCK_THRESHOLD) return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Low Stock</span>;
+  const s = statusOf(total);
+  if (s === 'out') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400">Out of Stock</span>;
+  if (s === 'low') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Low Stock</span>;
   return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400">In Stock</span>;
 }
 
-function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
-  const colors: Record<string, string> = {
+function StatCard({ label, value, color, active, onClick }: { label: string; value: number; color: string; active: boolean; onClick: () => void }) {
+  const base: Record<string, string> = {
     slate: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100',
     emerald: 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400',
     amber: 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400',
     red: 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400',
   };
+  const ring: Record<string, string> = {
+    slate: 'ring-slate-400 dark:ring-slate-500',
+    emerald: 'ring-emerald-500',
+    amber: 'ring-amber-500',
+    red: 'ring-red-500',
+  };
   return (
-    <div className={`rounded-2xl border p-4 ${colors[color]}`}>
+    <button
+      onClick={onClick}
+      className={`text-left rounded-2xl border p-4 transition-all hover:scale-[1.02] hover:shadow-md cursor-pointer ${base[color]} ${active ? `ring-2 ${ring[color]} shadow-md` : ''}`}
+    >
       <p className="text-2xl font-black">{value}</p>
       <p className="text-xs font-semibold opacity-60 mt-0.5">{label}</p>
-    </div>
+    </button>
   );
 }
 
 export default function InventoryDashboard() {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   const [syncStatus, setSyncStatus] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | 'low' | 'out'>('all');
+  const [filter, setFilter] = useState<FilterKey>('all');
 
   useEffect(() => {
     if (status === 'authenticated') fetchInventory();
@@ -98,32 +116,33 @@ export default function InventoryDashboard() {
 
   async function triggerSync() {
     setLoading(true);
-    setSyncStatus('Requesting report from Amazon...');
+    setSyncStatus('Syncing with Amazon... this may take up to a minute');
     try {
-      const start = await fetch('/api/sync/start').then(r => r.json());
-      if (!start.reportId) { setSyncStatus(''); setLoading(false); return; }
-
-      let ready = false;
-      let docId = '';
-      for (let i = 0; i < 20; i++) {
-        setSyncStatus(`Waiting for Amazon... (${i + 1}/20)`);
-        await new Promise(r => setTimeout(r, 3000));
-        const check = await fetch(`/api/sync/check?reportId=${start.reportId}`).then(r => r.json());
-        if (check.ready) { ready = true; docId = check.reportDocumentId; break; }
+      // Retry up to 3 times if Amazon report isn't ready yet (408)
+      let attempts = 0;
+      while (attempts < 3) {
+        attempts++;
+        const res = await fetch('/api/sync/full');
+        if (res.ok) {
+          const result = await res.json();
+          await fetchInventory();
+          setSyncStatus(`Synced ${result.upserted || 0} products`);
+          setTimeout(() => setSyncStatus(''), 4000);
+          break;
+        }
+        if (res.status === 408) {
+          setSyncStatus(`Amazon still preparing report... retry ${attempts}/3`);
+          continue;
+        }
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Sync failed');
       }
-
-      if (ready) {
-        setSyncStatus('Downloading inventory data...');
-        const result = await fetch(`/api/sync/download?reportDocumentId=${docId}`).then(r => r.json());
-        await fetchInventory();
-        setSyncStatus(`Synced ${result.upserted || 0} products`);
-        setTimeout(() => setSyncStatus(''), 4000);
-      } else {
-        setSyncStatus('Amazon timed out. Try again in 2 minutes.');
+      if (attempts >= 3) {
+        setSyncStatus('Amazon timed out. Try again in a minute.');
         setTimeout(() => setSyncStatus(''), 5000);
       }
-    } catch {
-      setSyncStatus('Sync failed. Check console for details.');
+    } catch (e: any) {
+      setSyncStatus(e.message || 'Sync failed. Check console for details.');
       setTimeout(() => setSyncStatus(''), 5000);
     }
     setLoading(false);
@@ -142,8 +161,9 @@ export default function InventoryDashboard() {
     let inStock = 0, lowStock = 0, outOfStock = 0;
     for (const item of inventory) {
       const qty = (item.fba_quantity || 0) + (item.fbm_quantity || 0) + (item.shop_stock || 0);
-      if (qty === 0) outOfStock++;
-      else if (qty <= LOW_STOCK_THRESHOLD) lowStock++;
+      const s = statusOf(qty);
+      if (s === 'out') outOfStock++;
+      else if (s === 'low') lowStock++;
       else inStock++;
     }
     return { total: inventory.length, inStock, lowStock, outOfStock };
@@ -156,7 +176,8 @@ export default function InventoryDashboard() {
   }, [inventory]);
 
   const filtered = useMemo(() => {
-    let items = inventory;
+    let items = inventory.slice();
+
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       items = items.filter(i =>
@@ -164,17 +185,25 @@ export default function InventoryDashboard() {
         i.sku.toLowerCase().includes(q)
       );
     }
-    if (filter === 'low') {
+
+    if (filter !== 'all') {
       items = items.filter(i => {
         const t = (i.fba_quantity || 0) + (i.fbm_quantity || 0) + (i.shop_stock || 0);
-        return t > 0 && t <= LOW_STOCK_THRESHOLD;
-      });
-    } else if (filter === 'out') {
-      items = items.filter(i => {
-        const t = (i.fba_quantity || 0) + (i.fbm_quantity || 0) + (i.shop_stock || 0);
-        return t === 0;
+        return statusOf(t) === filter;
       });
     }
+
+    // Default sort: In Stock first, then Low Stock, then Out of Stock; then alphabetically
+    const order = { in: 0, low: 1, out: 2 } as const;
+    items.sort((a, b) => {
+      const ta = (a.fba_quantity || 0) + (a.fbm_quantity || 0) + (a.shop_stock || 0);
+      const tb = (b.fba_quantity || 0) + (b.fbm_quantity || 0) + (b.shop_stock || 0);
+      const oa = order[statusOf(ta)];
+      const ob = order[statusOf(tb)];
+      if (oa !== ob) return oa - ob;
+      return (a.product_name || a.sku).localeCompare(b.product_name || b.sku);
+    });
+
     return items;
   }, [inventory, searchQuery, filter]);
 
@@ -189,27 +218,27 @@ export default function InventoryDashboard() {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       {/* Header */}
       <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-black tracking-tight text-slate-900 dark:text-slate-100">
-              Treat Tracker <span className="text-blue-600 dark:text-blue-400">Pro</span>
+        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <h1 className="text-base sm:text-lg font-black tracking-tight text-slate-900 dark:text-slate-100 truncate">
+              Glorious Treats <span className="text-blue-600 dark:text-blue-400">&amp; Chews</span> Inventory
             </h1>
             {syncStatus && (
-              <span className="hidden sm:inline text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2.5 py-1 rounded-full">
+              <span className="hidden lg:inline text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2.5 py-1 rounded-full whitespace-nowrap">
                 {syncStatus}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={triggerSync}
               disabled={loading}
-              className="flex items-center gap-1.5 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="flex items-center gap-1.5 bg-blue-600 text-white px-3 sm:px-4 py-2 rounded-lg font-semibold text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {loading ? (
-                <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Syncing...</>
+                <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> <span className="hidden sm:inline">Syncing...</span></>
               ) : (
-                <><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg> Sync Amazon</>
+                <><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg> <span className="hidden sm:inline">Sync Amazon</span></>
               )}
             </button>
             <ThemeToggle />
@@ -223,51 +252,36 @@ export default function InventoryDashboard() {
           </div>
         </div>
         {syncStatus && (
-          <div className="sm:hidden bg-blue-50 dark:bg-blue-900/30 px-4 py-2 text-xs font-medium text-blue-600 dark:text-blue-400 text-center">
+          <div className="lg:hidden bg-blue-50 dark:bg-blue-900/30 px-4 py-2 text-xs font-medium text-blue-600 dark:text-blue-400 text-center">
             {syncStatus}
           </div>
         )}
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-        {/* Stats Row */}
+        {/* Stats Row (clickable filters) */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <StatCard label="Total Products" value={stats.total} color="slate" />
-          <StatCard label="In Stock" value={stats.inStock} color="emerald" />
-          <StatCard label="Low Stock" value={stats.lowStock} color="amber" />
-          <StatCard label="Out of Stock" value={stats.outOfStock} color="red" />
+          <StatCard label="Total Products" value={stats.total} color="slate" active={filter === 'all'} onClick={() => setFilter('all')} />
+          <StatCard label="In Stock" value={stats.inStock} color="emerald" active={filter === 'in'} onClick={() => setFilter('in')} />
+          <StatCard label="Low Stock" value={stats.lowStock} color="amber" active={filter === 'low'} onClick={() => setFilter('low')} />
+          <StatCard label="Out of Stock" value={stats.outOfStock} color="red" active={filter === 'out'} onClick={() => setFilter('out')} />
         </div>
 
-        {/* Search & Filters */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-            <input
-              type="text"
-              placeholder="Search by product name or SKU..."
-              className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {searchQuery && (
-              <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-              </button>
-            )}
-          </div>
-          <div className="flex gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg self-start">
-            {([['all', 'All'], ['low', 'Low Stock'], ['out', 'No Stock']] as const).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setFilter(key)}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-                  filter === key ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+        {/* Search */}
+        <div className="relative">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          <input
+            type="text"
+            placeholder="Search by product name or SKU..."
+            className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          )}
         </div>
 
         {/* Last sync info */}
@@ -293,11 +307,18 @@ export default function InventoryDashboard() {
             <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
               {filtered.map(item => {
                 const total = (item.fba_quantity || 0) + (item.fbm_quantity || 0) + (item.shop_stock || 0);
+                const name = item.product_name?.trim();
                 return (
                   <tr key={item.sku} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="py-3 px-4">
-                      <p className="font-semibold text-slate-800 dark:text-slate-200 leading-tight">{item.product_name || '—'}</p>
-                      <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5 font-mono">{item.sku}</p>
+                      {name ? (
+                        <>
+                          <p className="font-semibold text-slate-800 dark:text-slate-200 leading-tight">{name}</p>
+                          <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5 font-mono">{item.sku}</p>
+                        </>
+                      ) : (
+                        <p className="font-semibold text-slate-800 dark:text-slate-200 leading-tight font-mono">{item.sku}</p>
+                      )}
                     </td>
                     <td className="text-center py-3 px-3">
                       <span className="font-semibold text-orange-600 dark:text-orange-400">{item.fba_quantity || 0}</span>
@@ -332,12 +353,19 @@ export default function InventoryDashboard() {
         <div className="md:hidden space-y-3">
           {filtered.map(item => {
             const total = (item.fba_quantity || 0) + (item.fbm_quantity || 0) + (item.shop_stock || 0);
+            const name = item.product_name?.trim();
             return (
               <div key={item.sku} className={`bg-white dark:bg-slate-900 rounded-xl border p-4 ${total === 0 ? 'border-red-200 dark:border-red-800' : total <= LOW_STOCK_THRESHOLD ? 'border-amber-200 dark:border-amber-800' : 'border-slate-200 dark:border-slate-800'}`}>
                 <div className="flex justify-between items-start mb-3">
                   <div className="flex-1 min-w-0 mr-3">
-                    <p className="font-semibold text-slate-800 dark:text-slate-200 text-sm leading-tight truncate">{item.product_name || '—'}</p>
-                    <p className="text-xs text-slate-400 dark:text-slate-500 font-mono mt-0.5">{item.sku}</p>
+                    {name ? (
+                      <>
+                        <p className="font-semibold text-slate-800 dark:text-slate-200 text-sm leading-tight truncate">{name}</p>
+                        <p className="text-xs text-slate-400 dark:text-slate-500 font-mono mt-0.5">{item.sku}</p>
+                      </>
+                    ) : (
+                      <p className="font-semibold text-slate-800 dark:text-slate-200 text-sm leading-tight truncate font-mono">{item.sku}</p>
+                    )}
                   </div>
                   <div className="text-right shrink-0">
                     <p className={`text-2xl font-black ${total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-800 dark:text-slate-200'}`}>{total}</p>

@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Treat Tracker Pro",
+  title: "Glorious Treats & Chews Inventory",
   description: "Dog treats & chews inventory management",
 };
 
