@@ -23,11 +23,28 @@ export async function GET(request: NextRequest) {
   try {
     const token = await getAccessToken();
 
-    // 1. Fetch ALL FBA inventory entries that match (case-insensitive)
+    // 1a. Direct FBA query for this specific SKU using sellerSkus filter
+    const directUrl =
+      `${SPAPI}/fba/inventory/v1/summaries?details=true` +
+      `&granularityType=Marketplace&granularityId=${MARKETPLACE_ID}` +
+      `&marketplaceIds=${MARKETPLACE_ID}` +
+      `&sellerSkus=${encodeURIComponent(targetSku)}`;
+    const directRes = await fetch(directUrl, { headers: { 'x-amz-access-token': token } });
+    const directData = await directRes.json();
+    result.fbaDirectQuery = {
+      httpStatus: directRes.status,
+      url: directUrl,
+      raw: directData,
+    };
+
+    // 1b. Paginated full scan with diagnostics on every page
     const fbaMatches: any[] = [];
+    const pageLog: Array<{ page: number; httpStatus: number; itemCount: number; hasNextToken: boolean; errorBody?: any }> = [];
     let nextToken: string | null = null;
     let totalFbaItems = 0;
+    let pageNum = 0;
     do {
+      pageNum++;
       const url: string = nextToken
         ? `${SPAPI}/fba/inventory/v1/summaries?details=true&granularityType=Marketplace&granularityId=${MARKETPLACE_ID}&marketplaceIds=${MARKETPLACE_ID}&nextToken=${encodeURIComponent(nextToken)}`
         : `${SPAPI}/fba/inventory/v1/summaries?details=true&granularityType=Marketplace&granularityId=${MARKETPLACE_ID}&marketplaceIds=${MARKETPLACE_ID}`;
@@ -35,6 +52,13 @@ export async function GET(request: NextRequest) {
       const data = await res.json();
       const summaries = data.payload?.inventorySummaries || [];
       totalFbaItems += summaries.length;
+      pageLog.push({
+        page: pageNum,
+        httpStatus: res.status,
+        itemCount: summaries.length,
+        hasNextToken: !!data.pagination?.nextToken,
+        ...(res.status >= 400 ? { errorBody: data } : {}),
+      });
       for (const item of summaries) {
         const itemSku = (item.sellerSku || '').trim();
         if (itemSku.toUpperCase() === targetUpper || itemSku.toUpperCase().includes(targetUpper)) {
@@ -49,10 +73,14 @@ export async function GET(request: NextRequest) {
         }
       }
       nextToken = data.pagination?.nextToken ?? null;
-    } while (nextToken);
+      // Throttle: FBA Inventory rate limit is 2 req/sec
+      if (nextToken) await new Promise(r => setTimeout(r, 600));
+    } while (nextToken && pageNum < 50);
 
     result.fba = {
       totalFbaItemsScanned: totalFbaItems,
+      pagesFetched: pageNum,
+      pageLog,
       matchesFound: fbaMatches.length,
       matches: fbaMatches,
     };
