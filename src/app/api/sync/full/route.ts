@@ -3,6 +3,7 @@ import { gunzipSync } from 'node:zlib';
 import { getAccessToken } from '@/lib/amazon';
 import { auth } from '@/auth';
 import { getDb } from '@/lib/db';
+import { ensureChannelColumns } from '@/lib/shopify';
 
 export const maxDuration = 60;
 
@@ -24,6 +25,7 @@ export async function GET() {
   const deadline = startTime + 52_000; // leave 8s buffer before Vercel's 60s limit
 
   try {
+    await ensureChannelColumns();
     const token = await getAccessToken();
 
     // Fetch FBA inventory in parallel with starting the report
@@ -127,13 +129,14 @@ export async function GET() {
     for (let i = 0; i < rows.length; i += BATCH) {
       const slice = rows.slice(i, i + BATCH);
       await Promise.all(slice.map(r => sql`
-        INSERT INTO inventory (sku, product_name, fbm_quantity, fba_quantity, last_sync_at)
-        VALUES (${r.sku}, ${r.name}, ${r.fbm}, ${r.fba}, ${syncTime})
+        INSERT INTO inventory (sku, product_name, fbm_quantity, fba_quantity, last_sync_at, on_amazon)
+        VALUES (${r.sku}, ${r.name}, ${r.fbm}, ${r.fba}, ${syncTime}, TRUE)
         ON CONFLICT (sku) DO UPDATE SET
           product_name = EXCLUDED.product_name,
           fbm_quantity = EXCLUDED.fbm_quantity,
           fba_quantity = EXCLUDED.fba_quantity,
-          last_sync_at = EXCLUDED.last_sync_at
+          last_sync_at = EXCLUDED.last_sync_at,
+          on_amazon = TRUE
       `));
       upserted += slice.length;
     }
