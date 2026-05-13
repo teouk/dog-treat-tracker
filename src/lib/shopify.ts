@@ -34,4 +34,5 @@ export async function ensureChannelColumns(): Promise<void> {
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS on_amazon BOOLEAN DEFAULT TRUE`;
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS on_shopify BOOLEAN DEFAULT FALSE`;
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS shopify_synced_at TIMESTAMPTZ`;
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS fulfillment_channel TEXT`;
 }

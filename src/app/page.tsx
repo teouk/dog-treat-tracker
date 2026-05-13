@@ -151,8 +151,11 @@ export default function InventoryDashboard() {
       if (res.ok) {
         const result = await res.json();
         await fetchInventory();
-        setSyncStatus(`Refreshed ${result.fbaMatched || 0} of ${result.totalSkus || 0} FBA SKUs`);
-        setTimeout(() => setSyncStatus(''), 4000);
+        setSyncStatus(
+          `Refreshed FBA: ${result.fbaReturnedByApi || 0} of ${result.totalFbaSkusInDb || 0} SKUs` +
+          (result.failedBatches ? ` (${result.failedBatches} batches failed — try again)` : '')
+        );
+        setTimeout(() => setSyncStatus(''), 4500);
       } else {
         const body = await res.json().catch(() => ({}));
         if (body.error === 'NO_SKUS') {

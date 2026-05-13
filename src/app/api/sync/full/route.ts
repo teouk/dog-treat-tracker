@@ -163,15 +163,15 @@ export async function GET(request: NextRequest) {
       const fbmQty = r.channel === 'DEFAULT' ? r.quantity : 0;
       const fbaQty = fbaData?.qty || 0;
       const name = r.name || fbaData?.name || '';
-      return { sku: r.sku, name, fbm: fbmQty, fba: fbaQty };
+      return { sku: r.sku, name, fbm: fbmQty, fba: fbaQty, channel: r.channel };
     });
 
     const BATCH = 20;
     for (let i = 0; i < finalRows.length; i += BATCH) {
       const slice = finalRows.slice(i, i + BATCH);
       await Promise.all(slice.map(r => sql`
-        INSERT INTO inventory (sku, product_name, fbm_quantity, fba_quantity, last_sync_at, on_amazon)
-        VALUES (${r.sku}, ${r.name}, ${r.fbm}, ${r.fba}, ${syncTime}, TRUE)
+        INSERT INTO inventory (sku, product_name, fbm_quantity, fba_quantity, last_sync_at, on_amazon, fulfillment_channel)
+        VALUES (${r.sku}, ${r.name}, ${r.fbm}, ${r.fba}, ${syncTime}, TRUE, ${r.channel})
         ON CONFLICT (sku) DO UPDATE SET
           product_name = CASE
             WHEN EXCLUDED.product_name IS NULL OR EXCLUDED.product_name = ''
@@ -181,7 +181,8 @@ export async function GET(request: NextRequest) {
           fbm_quantity = EXCLUDED.fbm_quantity,
           fba_quantity = EXCLUDED.fba_quantity,
           last_sync_at = EXCLUDED.last_sync_at,
-          on_amazon = TRUE
+          on_amazon = TRUE,
+          fulfillment_channel = EXCLUDED.fulfillment_channel
       `));
       upserted += slice.length;
     }
