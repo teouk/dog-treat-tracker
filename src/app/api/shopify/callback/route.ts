@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Token exchange failed', detail: data }, { status: 500 });
     }
 
-    await saveShopifyToken(data.access_token);
+    await saveShopifyToken(data.access_token, data.scope || '');
 
     return NextResponse.redirect(new URL('/?shopify=connected', request.url));
   } catch (e: any) {

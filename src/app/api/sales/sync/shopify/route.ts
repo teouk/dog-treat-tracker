@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getDb } from '@/lib/db';
 import { ensureFinanceColumns, getLastSaleDate } from '@/lib/finance';
-import { fetchShopifyOrders, getShopifyToken, ShopifyForbiddenError } from '@/lib/shopify';
+import { fetchShopifyOrders, getShopifyToken, getShopifyScope, ShopifyForbiddenError } from '@/lib/shopify';
 
 export const maxDuration = 60;
 
@@ -17,6 +17,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       { error: 'NOT_CONNECTED', message: 'Connect Shopify first.' },
       { status: 400 }
+    );
+  }
+
+  // Pre-flight: if we know the granted scopes and read_orders is missing,
+  // tell the user exactly what to fix instead of letting Shopify return 403.
+  const grantedScope = await getShopifyScope();
+  if (grantedScope !== null && !grantedScope.split(',').map(s => s.trim()).includes('read_orders')) {
+    return NextResponse.json(
+      {
+        error: 'SCOPE_MISSING',
+        message:
+          'Shopify did not grant read_orders. Add "read_orders" to your app\'s "Access scopes" in the Shopify Dev Dashboard, release a new version, then disconnect and reconnect Shopify here.',
+        grantedScopes: grantedScope.split(',').map(s => s.trim()),
+        missingScopes: ['read_orders'],
+      },
+      { status: 403 }
     );
   }
 
@@ -42,8 +58,9 @@ export async function POST(request: NextRequest) {
     if (e instanceof ShopifyForbiddenError) {
       return NextResponse.json(
         {
-          error: 'RECONNECT_REQUIRED',
-          message: 'Shopify needs to be reconnected to grant order permissions (read_orders scope).',
+          error: 'SCOPE_MISSING',
+          message:
+            'Shopify returned 403. Add "read_orders" to your app\'s "Access scopes" in the Shopify Dev Dashboard, release a new version, then disconnect and reconnect Shopify here.',
         },
         { status: 403 }
       );
@@ -71,7 +88,7 @@ export async function POST(request: NextRequest) {
       const result = await sql`
         INSERT INTO sales (channel, external_order_id, sku, quantity, unit_price, total_revenue, sale_date)
         VALUES ('shopify', ${externalId}, ${sku}, ${quantity}, ${unitPrice}, ${total}, ${saleDate})
-        ON CONFLICT (channel, external_order_id, sku) DO NOTHING
+        ON CONFLICT (channel, external_order_id, sku) WHERE external_order_id IS NOT NULL DO NOTHING
         RETURNING id
       ` as Array<{ id: string }>;
       if (result.length > 0) inserted++;

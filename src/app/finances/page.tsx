@@ -213,8 +213,10 @@ export default function FinancesPage() {
         setMsg(`Imported ${r.inserted} new Shopify sales (${r.ordersFetched} orders, ${r.lineItemsProcessed} line items)`);
       } else {
         const err = await res.json().catch(() => ({}));
-        if (err.error === 'RECONNECT_REQUIRED') {
-          setMsg('Reconnect Shopify to grant order permissions — see Inventory page.');
+        if (err.error === 'SCOPE_MISSING' || err.error === 'RECONNECT_REQUIRED') {
+          setMsg(err.message || 'Shopify scope missing — see instructions.');
+        } else if (err.error === 'NOT_CONNECTED') {
+          setMsg('Shopify not connected. Go to the Inventory page → Shopify tab → Connect.');
         } else {
           throw new Error(err.message || err.error || 'Sync failed');
         }
@@ -223,7 +225,7 @@ export default function FinancesPage() {
     } catch (e: any) {
       setMsg(e.message || 'Sync failed');
     }
-    setTimeout(() => setMsg(''), 6000);
+    setTimeout(() => setMsg(''), 15000);
     setBusy(false);
   }
 

@@ -137,7 +137,7 @@ export async function POST(request: NextRequest) {
       const result = await sql`
         INSERT INTO sales (channel, external_order_id, sku, quantity, unit_price, total_revenue, sale_date)
         VALUES ('amazon', ${externalId}, ${sku}, ${quantity}, ${unitPrice}, ${totalRevenue}, ${purchaseDate})
-        ON CONFLICT (channel, external_order_id, sku) DO NOTHING
+        ON CONFLICT (channel, external_order_id, sku) WHERE external_order_id IS NOT NULL DO NOTHING
         RETURNING id
       ` as Array<{ id: string }>;
       if (result.length > 0) inserted++;
