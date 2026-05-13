@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { gunzipSync } from 'node:zlib';
 import { getAccessToken } from '@/lib/amazon';
 import { auth } from '@/auth';
@@ -19,36 +19,42 @@ async function spFetch(path: string, token: string, init?: RequestInit) {
   });
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const startTime = Date.now();
-  // Leave ~15s for the FBA batch fetch + DB writes after the report is ready
-  const reportDeadline = startTime + 42_000;
+  // Leave ~13s for the FBA batch fetch + DB writes after the report is ready
+  const reportDeadline = startTime + 47_000;
 
   try {
     await ensureChannelColumns();
     const token = await getAccessToken();
 
-    // 1. Request the merchant listings report
-    const reportRes = await spFetch('/reports/2021-06-30/reports', token, {
-      method: 'POST',
-      body: JSON.stringify({
-        reportType: 'GET_MERCHANT_LISTINGS_ALL_DATA',
-        marketplaceIds: [MARKETPLACE_ID],
-      }),
-    });
-    const reportData = await reportRes.json();
-    if (!reportData.reportId) {
-      return NextResponse.json({ error: 'Failed to request report', detail: reportData }, { status: 500 });
+    // 1. Reuse the report from a previous call if the client is retrying,
+    //    otherwise request a new one. Reusing avoids restarting Amazon's
+    //    report generation each retry, which is what was causing the loop.
+    let reportId = request.nextUrl.searchParams.get('reportId') || '';
+    if (!reportId) {
+      const reportRes = await spFetch('/reports/2021-06-30/reports', token, {
+        method: 'POST',
+        body: JSON.stringify({
+          reportType: 'GET_MERCHANT_LISTINGS_ALL_DATA',
+          marketplaceIds: [MARKETPLACE_ID],
+        }),
+      });
+      const reportData = await reportRes.json();
+      if (!reportData.reportId) {
+        return NextResponse.json({ error: 'Failed to request report', detail: reportData }, { status: 500 });
+      }
+      reportId = reportData.reportId;
     }
 
     // 2. Poll for report completion
     let reportDocumentId = '';
     while (Date.now() < reportDeadline) {
       await new Promise(r => setTimeout(r, 2000));
-      const checkRes = await spFetch(`/reports/2021-06-30/reports/${reportData.reportId}`, token);
+      const checkRes = await spFetch(`/reports/2021-06-30/reports/${reportId}`, token);
       const checkData = await checkRes.json();
       if (checkData.processingStatus === 'DONE') {
         reportDocumentId = checkData.reportDocumentId;
@@ -59,8 +65,9 @@ export async function GET() {
       }
     }
     if (!reportDocumentId) {
+      // Return the reportId so the client can retry against the same in-flight report
       return NextResponse.json(
-        { error: 'TIMEOUT', message: 'Amazon report is still being prepared. Try again in a minute.' },
+        { error: 'TIMEOUT', message: 'Amazon report is still being prepared.', reportId },
         { status: 408 }
       );
     }

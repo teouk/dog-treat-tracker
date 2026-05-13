@@ -145,29 +145,37 @@ export default function InventoryDashboard() {
 
   async function triggerAmazonSync() {
     setLoading(true);
-    setSyncStatus('Syncing Amazon... this may take up to a minute');
+    setSyncStatus('Syncing Amazon... this may take up to two minutes');
     try {
       let attempts = 0;
-      while (attempts < 3) {
+      let pendingReportId = '';
+      let completed = false;
+      while (attempts < 4) {
         attempts++;
-        const res = await fetch('/api/sync/full');
+        const url = pendingReportId
+          ? `/api/sync/full?reportId=${encodeURIComponent(pendingReportId)}`
+          : '/api/sync/full';
+        const res = await fetch(url);
         if (res.ok) {
           const result = await res.json();
           await fetchInventory();
           setSyncStatus(`Synced ${result.upserted || 0} Amazon products`);
           setTimeout(() => setSyncStatus(''), 4000);
+          completed = true;
           break;
         }
         if (res.status === 408) {
-          setSyncStatus(`Amazon still preparing report... retry ${attempts}/3`);
+          const body = await res.json().catch(() => ({}));
+          pendingReportId = body.reportId || pendingReportId;
+          setSyncStatus(`Amazon still preparing report... continuing (${attempts}/4)`);
           continue;
         }
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || 'Sync failed');
       }
-      if (attempts >= 3) {
-        setSyncStatus('Amazon timed out. Try again in a minute.');
-        setTimeout(() => setSyncStatus(''), 5000);
+      if (!completed) {
+        setSyncStatus('Amazon report took too long. Try again in a few minutes.');
+        setTimeout(() => setSyncStatus(''), 6000);
       }
     } catch (e: any) {
       setSyncStatus(e.message || 'Sync failed');
