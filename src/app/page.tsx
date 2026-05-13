@@ -3,6 +3,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import Login from '@/components/Login';
 import ThemeToggle from '@/components/ThemeToggle';
+import Nav from '@/components/Nav';
 
 type InventoryItem = {
   sku: string;
@@ -322,10 +323,11 @@ export default function InventoryDashboard() {
       {/* Header */}
       <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-4 min-w-0">
             <h1 className="text-base sm:text-lg font-black tracking-tight text-slate-900 dark:text-slate-100 truncate">
-              Glorious Treats <span className="text-blue-600 dark:text-blue-400">&amp; Chews</span> Inventory
+              Glorious Treats <span className="text-blue-600 dark:text-blue-400">&amp; Chews</span>
             </h1>
+            <Nav />
             {syncStatus && (
               <span className="hidden xl:inline text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2.5 py-1 rounded-full whitespace-nowrap">
                 {syncStatus}

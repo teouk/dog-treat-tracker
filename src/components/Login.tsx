@@ -22,7 +22,7 @@ export default function Login() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-xl font-black tracking-tight text-slate-900 dark:text-slate-100">
-            Glorious Treats <span className="text-blue-600 dark:text-blue-400">&amp; Chews</span> Inventory
+            Glorious Treats <span className="text-blue-600 dark:text-blue-400">&amp; Chews</span>
           </h1>
           <p className="text-slate-400 dark:text-slate-500 text-sm mt-1">Inventory Management</p>
         </div>
