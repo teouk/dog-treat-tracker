@@ -145,12 +145,39 @@ export default function InventoryDashboard() {
 
   async function triggerAmazonSync() {
     setLoading(true);
-    setSyncStatus('Syncing Amazon... this may take up to two minutes');
+    setSyncStatus('Refreshing Amazon FBA stock...');
+    try {
+      const res = await fetch('/api/sync/fast');
+      if (res.ok) {
+        const result = await res.json();
+        await fetchInventory();
+        setSyncStatus(`Refreshed ${result.fbaMatched || 0} of ${result.totalSkus || 0} FBA SKUs`);
+        setTimeout(() => setSyncStatus(''), 4000);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        if (body.error === 'NO_SKUS') {
+          // First-time user with empty DB — fall through to full sync
+          setSyncStatus('First sync detected, running Full Refresh instead...');
+          await triggerAmazonFullSync();
+          return;
+        }
+        throw new Error(body.error || body.message || 'Sync failed');
+      }
+    } catch (e: any) {
+      setSyncStatus(e.message || 'Sync failed');
+      setTimeout(() => setSyncStatus(''), 5000);
+    }
+    setLoading(false);
+  }
+
+  async function triggerAmazonFullSync() {
+    setLoading(true);
+    setSyncStatus('Full Refresh: requesting Amazon report (this can take 2-3 min)...');
     try {
       let attempts = 0;
       let pendingReportId = '';
       let completed = false;
-      while (attempts < 4) {
+      while (attempts < 5) {
         attempts++;
         const url = pendingReportId
           ? `/api/sync/full?reportId=${encodeURIComponent(pendingReportId)}`
@@ -159,7 +186,7 @@ export default function InventoryDashboard() {
         if (res.ok) {
           const result = await res.json();
           await fetchInventory();
-          setSyncStatus(`Synced ${result.upserted || 0} Amazon products`);
+          setSyncStatus(`Full sync complete — ${result.upserted || 0} products`);
           setTimeout(() => setSyncStatus(''), 4000);
           completed = true;
           break;
@@ -167,7 +194,7 @@ export default function InventoryDashboard() {
         if (res.status === 408) {
           const body = await res.json().catch(() => ({}));
           pendingReportId = body.reportId || pendingReportId;
-          setSyncStatus(`Amazon still preparing report... continuing (${attempts}/4)`);
+          setSyncStatus(`Amazon still preparing report... continuing (${attempts}/5)`);
           continue;
         }
         const err = await res.json().catch(() => ({}));
@@ -422,18 +449,30 @@ export default function InventoryDashboard() {
           )}
         </div>
 
-        {/* Last sync + disconnect link */}
+        {/* Last sync + actions */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           {lastSync ? (
             <p className="text-xs text-slate-400 dark:text-slate-500">
               Last {channel === 'shopify' ? 'Shopify' : 'Amazon'} sync: {lastSync.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} at {lastSync.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
             </p>
           ) : <span />}
-          {channel === 'shopify' && shopifyConnected && (
-            <button onClick={disconnectShopify} className="text-xs text-slate-400 hover:text-red-500 transition-colors">
-              Disconnect Shopify
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            {(channel === 'all' || channel === 'amazon') && (
+              <button
+                onClick={triggerAmazonFullSync}
+                disabled={loading}
+                className="text-xs text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors disabled:opacity-50"
+                title="Run a full report-based refresh (slow). Updates SKU list and FBM quantities. Runs automatically daily."
+              >
+                Full Refresh (slow)
+              </button>
+            )}
+            {channel === 'shopify' && shopifyConnected && (
+              <button onClick={disconnectShopify} className="text-xs text-slate-400 hover:text-red-500 transition-colors">
+                Disconnect Shopify
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Inventory Table — Desktop */}
