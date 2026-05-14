@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { SHOPIFY_STORE, SHOPIFY_CLIENT_ID, SHOPIFY_SCOPES } from '@/lib/shopify';
+import { storeOAuthState } from '@/lib/security';
 
 export async function GET(request: NextRequest) {
   const session = await auth();
@@ -12,7 +13,9 @@ export async function GET(request: NextRequest) {
 
   const baseUrl = request.nextUrl.origin;
   const redirectUri = `${baseUrl}/api/shopify/callback`;
-  const state = Math.random().toString(36).substring(2);
+
+  // Cryptographically secure state nonce, stored in DB with 10-min expiry.
+  const state = await storeOAuthState('shopify');
 
   const installUrl =
     `https://${SHOPIFY_STORE}/admin/oauth/authorize` +
