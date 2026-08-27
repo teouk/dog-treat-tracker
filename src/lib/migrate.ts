@@ -63,6 +63,16 @@ export async function ensureSchema(): Promise<void> {
     )
   `;
 
+  // --- Amazon detail breakdown ---
+  // fba_quantity stays the headline total; these record what makes it up,
+  // so a comprehensive sync can be audited rather than just trusted.
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS fba_fulfillable INTEGER DEFAULT 0`;
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS fba_inbound INTEGER DEFAULT 0`;
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS fba_reserved INTEGER DEFAULT 0`;
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS fba_unfulfillable INTEGER DEFAULT 0`;
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS amazon_status TEXT`;
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS amazon_last_full_sync_at TIMESTAMPTZ`;
+
   // --- manual stock adjustment audit trail ---
   await sql`
     CREATE TABLE IF NOT EXISTS stock_adjustments (
@@ -77,6 +87,67 @@ export async function ensureSchema(): Promise<void> {
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_stock_adj_sku_time ON stock_adjustments(sku, created_at DESC)`;
+
+  // stock_adjustments predates the receipt and outbound features; label
+  // where each row came from so the history view can separate them.
+  await sql`ALTER TABLE stock_adjustments ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'manual'`;
+
+  // --- inbound pallet deliveries ---
+  // Append-only: there are no update or delete paths for these two tables.
+  await sql`
+    CREATE TABLE IF NOT EXISTS bulk_receipts (
+      id          BIGSERIAL PRIMARY KEY,
+      reference   TEXT,
+      supplier    TEXT,
+      note        TEXT,
+      received_by TEXT,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS bulk_receipt_items (
+      id         BIGSERIAL PRIMARY KEY,
+      receipt_id BIGINT  NOT NULL REFERENCES bulk_receipts(id) ON DELETE RESTRICT,
+      sku        TEXT    NOT NULL,
+      quantity   INTEGER NOT NULL CHECK (quantity > 0),
+      before_qty INTEGER NOT NULL,
+      after_qty  INTEGER NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_receipt_items_receipt ON bulk_receipt_items(receipt_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_receipt_items_sku ON bulk_receipt_items(sku)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_bulk_receipts_created ON bulk_receipts(created_at DESC)`;
+
+  // --- outbound stock in transit to a channel's warehouse ---
+  // The UNIQUE key is what makes deduction idempotent: re-syncing a shipment
+  // we have already seen conflicts and is skipped, so stock is never
+  // deducted twice for the same shipment line.
+  await sql`
+    CREATE TABLE IF NOT EXISTS outbound_shipments (
+      id           BIGSERIAL PRIMARY KEY,
+      channel      TEXT NOT NULL CHECK (channel IN ('amazon','shopify')),
+      external_id  TEXT NOT NULL,
+      sku          TEXT NOT NULL,
+      quantity     INTEGER NOT NULL,
+      deducted     INTEGER NOT NULL DEFAULT 0,
+      status       TEXT,
+      detected_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (channel, external_id, sku)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_outbound_detected ON outbound_shipments(detected_at DESC)`;
+
+  // Level-based APIs report a running "incoming" total rather than discrete
+  // shipments, so we deduct only the increase since the last observation.
+  await sql`
+    CREATE TABLE IF NOT EXISTS channel_incoming_state (
+      channel       TEXT NOT NULL,
+      sku           TEXT NOT NULL,
+      last_incoming INTEGER NOT NULL DEFAULT 0,
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (channel, sku)
+    )
+  `;
 
   migrationRan = true;
 }

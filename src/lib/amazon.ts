@@ -38,7 +38,18 @@ export function spFetch(path: string, token: string, init?: RequestInit) {
   });
 }
 
-export type FbaSummary = { qty: number; name: string };
+export type FbaSummary = {
+  /** totalQuantity — the headline figure Seller Central shows. */
+  qty: number;
+  name: string;
+  asin: string;
+  /** Ready to ship right now. */
+  fulfillable: number;
+  /** Working + shipped + receiving, i.e. stock already on its way to Amazon. */
+  inbound: number;
+  reserved: number;
+  unfulfillable: number;
+};
 
 /**
  * Fetch FBA quantities for a batch of SKUs, following pagination within the
@@ -84,9 +95,19 @@ async function fetchFbaBatch(
       for (const item of data.payload?.inventorySummaries || []) {
         const sku = (item.sellerSku || '').trim();
         if (!sku) continue;
+        const d = item.inventoryDetails || {};
+        const n = (v: unknown) => (typeof v === 'number' ? v : 0);
         map.set(sku.toUpperCase(), {
-          qty: typeof item.totalQuantity === 'number' ? item.totalQuantity : 0,
+          qty: n(item.totalQuantity),
           name: item.productName || '',
+          asin: item.asin || '',
+          fulfillable: n(d.fulfillableQuantity),
+          inbound:
+            n(d.inboundWorkingQuantity) +
+            n(d.inboundShippedQuantity) +
+            n(d.inboundReceivingQuantity),
+          reserved: n(d.reservedQuantity?.totalReservedQuantity),
+          unfulfillable: n(d.unfulfillableQuantity?.totalUnfulfillableQuantity),
         });
       }
       nextToken = data.pagination?.nextToken || null;
@@ -195,4 +216,108 @@ export async function fetchParentAsins(
   }
 
   return parents;
+}
+
+
+export type InboundLine = {
+  shipmentId: string;
+  shipmentName: string;
+  status: string;
+  sku: string;
+  quantityShipped: number;
+  quantityReceived: number;
+};
+
+/**
+ * List FBA inbound shipments and their line items — stock the seller has
+ * sent to Amazon that Amazon has acknowledged but not yet made sellable.
+ *
+ * This is the signal Phase 3 deducts against: once a pallet is on its way to
+ * a fulfilment centre it is no longer in the office, so shop stock should
+ * fall by exactly the shipped quantity.
+ *
+ * Requires the FBA Inbound role on the SP-API app. Returns an empty list on
+ * any failure so a missing role degrades to "no deductions" rather than
+ * breaking the whole sync.
+ */
+export async function fetchInboundShipments(
+  token: string,
+  statuses: string[] = ['WORKING', 'SHIPPED', 'RECEIVING']
+): Promise<InboundLine[]> {
+  const lines: InboundLine[] = [];
+
+  type Shipment = { ShipmentId?: string; ShipmentName?: string; ShipmentStatus?: string };
+  const shipments: Shipment[] = [];
+
+  let nextToken: string | null = null;
+  let guard = 0;
+
+  try {
+    do {
+      guard++;
+      const url = nextToken
+        ? `/fba/inbound/v0/shipments?MarketplaceId=${UK_MARKETPLACE_ID}` +
+          `&QueryType=NEXT_TOKEN&NextToken=${encodeURIComponent(nextToken)}`
+        : `/fba/inbound/v0/shipments?MarketplaceId=${UK_MARKETPLACE_ID}` +
+          `&QueryType=SHIPMENT&ShipmentStatusList=${statuses.join(',')}`;
+
+      const res = await spFetch(url, token);
+      if (res.status === 429 || res.status === 503) {
+        await sleep(1500);
+        continue;
+      }
+      if (!res.ok) {
+        console.error(
+          `[amazon] inbound shipments ${res.status}:`,
+          (await res.text()).substring(0, 200)
+        );
+        return [];
+      }
+
+      const data = await res.json();
+      const batch: Shipment[] = data.payload?.ShipmentData || [];
+      shipments.push(...batch);
+      nextToken = data.payload?.NextToken || null;
+      if (nextToken) await sleep(FBA_THROTTLE_MS);
+    } while (nextToken && guard < 20);
+  } catch (e) {
+    console.error('[amazon] inbound shipment listing failed:', e);
+    return [];
+  }
+
+  for (const shipment of shipments) {
+    const id = shipment.ShipmentId;
+    if (!id) continue;
+
+    try {
+      const res = await spFetch(
+        `/fba/inbound/v0/shipments/${encodeURIComponent(id)}/items?MarketplaceId=${UK_MARKETPLACE_ID}`,
+        token
+      );
+      if (!res.ok) {
+        console.error(`[amazon] inbound items ${id} -> ${res.status}`);
+        continue;
+      }
+
+      const data = await res.json();
+      for (const item of data.payload?.ItemData || []) {
+        const sku = (item.SellerSKU || '').trim();
+        if (!sku) continue;
+        lines.push({
+          shipmentId: id,
+          shipmentName: shipment.ShipmentName || '',
+          status: shipment.ShipmentStatus || '',
+          sku,
+          quantityShipped: typeof item.QuantityShipped === 'number' ? item.QuantityShipped : 0,
+          quantityReceived: typeof item.QuantityReceived === 'number' ? item.QuantityReceived : 0,
+        });
+      }
+    } catch (e) {
+      console.error(`[amazon] inbound items ${id} failed:`, e);
+    }
+
+    await sleep(FBA_THROTTLE_MS);
+  }
+
+  return lines;
 }

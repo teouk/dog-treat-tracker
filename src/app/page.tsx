@@ -5,6 +5,8 @@ import Login from '@/components/Login';
 import ThemeToggle from '@/components/ThemeToggle';
 import StockAdjuster from '@/components/StockAdjuster';
 import GroupNameEditor from '@/components/GroupNameEditor';
+import BulkReceiveModal from '@/components/BulkReceiveModal';
+import Nav from '@/components/Nav';
 import {
   type InventoryItem, type Channel, type StatusFilter, type Status, type ProductGroup,
   LOW_STOCK_THRESHOLD, statusOf, channelTotal, buildGroups,
@@ -75,6 +77,8 @@ export default function InventoryDashboard() {
   const [channel, setChannel] = useState<Channel>('all');
   const [shopifyConnected, setShopifyConnected] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [showReceive, setShowReceive] = useState(false);
+  const [deductAmazon, setDeductAmazon] = useState(true);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
@@ -82,15 +86,20 @@ export default function InventoryDashboard() {
 
     (async () => {
       try {
-        const [invRes, shopRes] = await Promise.all([
+        const [invRes, shopRes, setRes] = await Promise.all([
           fetch('/api/inventory'),
           fetch('/api/shopify/status'),
+          fetch('/api/settings'),
         ]);
         if (cancelled) return;
         const inv = await invRes.json();
         if (Array.isArray(inv)) setInventory(inv);
         const shop = await shopRes.json().catch(() => ({}));
         setShopifyConnected(!!shop.connected);
+        const settings = await setRes.json().catch(() => ({}));
+        if (typeof settings.deductOutboundAmazon === 'boolean') {
+          setDeductAmazon(settings.deductOutboundAmazon);
+        }
       } finally {
         if (!cancelled) setFetching(false);
       }
@@ -110,63 +119,53 @@ export default function InventoryDashboard() {
     setTimeout(() => setSyncStatus(''), ms);
   }
 
-  async function triggerAmazonSync() {
+  /**
+   * Drive the comprehensive Amazon sync to completion.
+   *
+   * The server does as much as fits in one invocation and hands back a
+   * token; we keep calling with it until the sync reports done. The cap is
+   * a safety net against an unexpected server-side loop, not an expected
+   * outcome.
+   */
+  async function runAmazonSync() {
     setAmazonLoading(true);
-    setSyncStatus('Refreshing Amazon FBA stock…');
-    try {
-      const res = await fetch('/api/sync/fast');
-      const body = await res.json().catch(() => ({}));
-      if (res.ok) {
-        await fetchInventory();
-        flash(
-          `Refreshed ${body.fbaReturnedByApi || 0} of ${body.totalFbaSkusInDb || 0} SKUs` +
-          (body.failedBatches ? ` — ${body.failedBatches} batches failed, try again` : '')
-        );
-      } else if (body.error === 'NO_SKUS') {
-        setSyncStatus('No SKUs yet — running a full refresh instead…');
-        await triggerAmazonFullSync();
-        return;
-      } else {
-        throw new Error(body.error || 'Sync failed');
-      }
-    } catch (e) {
-      flash(e instanceof Error ? e.message : 'Sync failed', 5000);
-    }
-    setAmazonLoading(false);
-  }
+    setSyncStatus('Starting comprehensive Amazon sync…');
 
-  async function triggerAmazonFullSync() {
-    setAmazonLoading(true);
-    setSyncStatus('Full refresh: requesting Amazon report (2–3 min)…');
     try {
-      let reportId = '';
+      let token = '';
       let done = false;
-      for (let attempt = 1; attempt <= 5 && !done; attempt++) {
-        const url = reportId
-          ? `/api/sync/full?reportId=${encodeURIComponent(reportId)}`
-          : '/api/sync/full';
+
+      for (let step = 0; step < 40 && !done; step++) {
+        const url = token
+          ? `/api/sync/amazon?token=${encodeURIComponent(token)}`
+          : '/api/sync/amazon';
         const res = await fetch(url);
-        if (res.ok) {
-          const body = await res.json();
-          await fetchInventory();
-          flash(
-            `Full sync complete — ${body.upserted || 0} listings` +
-            (body.variationFamilies ? `, ${body.variationFamilies} variation families` : '')
-          );
+        const body = await res.json().catch(() => ({}));
+
+        if (!res.ok) throw new Error(body.error || 'Sync failed');
+
+        if (body.done) {
           done = true;
-        } else if (res.status === 408) {
-          const body = await res.json().catch(() => ({}));
-          reportId = body.reportId || reportId;
-          setSyncStatus(`Amazon is still preparing the report… (${attempt}/5)`);
+          await fetchInventory();
+          const c = body.counters || {};
+          const bits = [
+            `${c.listings || 0} listings`,
+            `${c.fbaUpdated || 0} FBA SKUs`,
+          ];
+          if (c.variationFamilies) bits.push(`${c.variationFamilies} variation families`);
+          if (c.unitsDeducted) bits.push(`${c.unitsDeducted} units sent to Amazon deducted`);
+          flash(`Sync complete — ${bits.join(', ')}`, 7000);
         } else {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || 'Sync failed');
+          token = body.token || token;
+          setSyncStatus(body.progress || 'Working…');
         }
       }
-      if (!done) flash('Amazon report took too long. Try again shortly.', 6000);
+
+      if (!done) flash('Sync did not finish. Run it again to resume.', 6000);
     } catch (e) {
-      flash(e instanceof Error ? e.message : 'Sync failed', 5000);
+      flash(e instanceof Error ? e.message : 'Sync failed', 6000);
     }
+
     setAmazonLoading(false);
   }
 
@@ -189,6 +188,15 @@ export default function InventoryDashboard() {
     if (!confirm('Disconnect Shopify? You will need to re-authorise to sync again.')) return;
     await fetch('/api/shopify/disconnect', { method: 'POST' });
     setShopifyConnected(false);
+  }
+
+  async function saveDeduction(enabled: boolean) {
+    setDeductAmazon(enabled);
+    await fetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deductOutboundAmazon: enabled }),
+    });
   }
 
   function applyStock(sku: string, next: number) {
@@ -291,10 +299,12 @@ export default function InventoryDashboard() {
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
-          <h1 className="truncate text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100 sm:text-base">
-            Glorious Treats <span className="text-blue-600 dark:text-blue-400">&amp; Chews</span>
-            <span className="ml-2 hidden font-medium text-slate-400 dark:text-slate-500 sm:inline">Inventory</span>
-          </h1>
+          <div className="flex min-w-0 items-center gap-4">
+            <h1 className="truncate text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100 sm:text-base">
+              Glorious Treats <span className="text-blue-600 dark:text-blue-400">&amp; Chews</span>
+            </h1>
+            <Nav />
+          </div>
 
           <div className="flex shrink-0 items-center gap-2">
             {syncStatus && (
@@ -305,10 +315,10 @@ export default function InventoryDashboard() {
 
             {showAmazon && (
               <button
-                onClick={triggerAmazonSync}
+                onClick={runAmazonSync}
                 disabled={amazonLoading}
                 className={`${syncBtn} bg-orange-600 hover:bg-orange-700`}
-                title="Refresh Amazon FBA stock"
+                title="Comprehensive Amazon refresh: listings, FBA stock, variation families and inbound shipments"
               >
                 {amazonLoading
                   ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
@@ -372,6 +382,18 @@ export default function InventoryDashboard() {
                 {tab.label}
               </button>
             ))}
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowReceive(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Bulk order received
+            </button>
           </div>
 
           {lastSync && (
@@ -528,24 +550,37 @@ export default function InventoryDashboard() {
           )}
         </div>
 
-        <div className="flex justify-end gap-4">
-          {showAmazon && (
-            <button
-              onClick={triggerAmazonFullSync}
-              disabled={amazonLoading}
-              className="text-xs text-slate-400 transition-colors hover:text-blue-600 disabled:opacity-50 dark:hover:text-blue-400"
-              title="Re-import the SKU list, FBM quantities and variation families. Slow; runs nightly on its own."
-            >
-              Run full Amazon refresh
-            </button>
-          )}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <input
+              type="checkbox"
+              checked={deductAmazon}
+              onChange={e => saveDeduction(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-slate-300 accent-blue-600 dark:border-slate-600"
+            />
+            Deduct shop stock when stock is sent to Amazon
+          </label>
+
           {showShopify && shopifyConnected && (
             <button onClick={disconnectShopify} className="text-xs text-slate-400 transition-colors hover:text-red-500">
               Disconnect Shopify
             </button>
           )}
         </div>
+
       </main>
+
+      {showReceive && (
+        <BulkReceiveModal
+          inventory={inventory}
+          onClose={() => setShowReceive(false)}
+          onSaved={async ({ linesApplied, totalUnits }) => {
+            setShowReceive(false);
+            await fetchInventory();
+            flash(`Delivery recorded — ${totalUnits} units across ${linesApplied} product${linesApplied === 1 ? '' : 's'}`, 6000);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -639,7 +674,17 @@ function GroupRows({ group, single, open, channel, showAmazon, showShopify, onTo
               <p className="truncate text-sm font-medium text-slate-700 dark:text-slate-300">
                 {item.variant_label || <span className="text-slate-400 italic">Unlabelled</span>}
               </p>
-              <p className="truncate font-mono text-[11px] text-slate-400 dark:text-slate-500">{item.sku}</p>
+              <p className="truncate font-mono text-[11px] text-slate-400 dark:text-slate-500">
+                {item.sku}
+                {item.fba_inbound > 0 && (
+                  <span
+                    className="ml-2 font-sans font-semibold text-indigo-500 dark:text-indigo-400"
+                    title="Units in transit to an Amazon fulfilment centre"
+                  >
+                    ↗ {item.fba_inbound} in transit
+                  </span>
+                )}
+              </p>
             </td>
             {showAmazon && <td className="px-3 py-2 text-right"><Num value={item.fba_quantity || 0} muted /></td>}
             {showAmazon && <td className="px-3 py-2 text-right"><Num value={item.fbm_quantity || 0} muted /></td>}

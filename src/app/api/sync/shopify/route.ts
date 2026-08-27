@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getDb } from '@/lib/db';
 import { ensureSchema } from '@/lib/migrate';
-import { getShopifyToken, SHOPIFY_STORE, SHOPIFY_API_VERSION } from '@/lib/shopify';
+import { getShopifyToken, fetchShopifyIncoming, SHOPIFY_STORE, SHOPIFY_API_VERSION } from '@/lib/shopify';
+import { applyShopifyIncoming } from '@/lib/outbound';
 
 export const maxDuration = 60;
 
@@ -129,12 +130,19 @@ export async function GET() {
     for (const r of results) if (r[0]?.inserted) inserted++;
   }
 
+  // Stock Shopify reports as incoming has left the office, so take it off
+  // shop stock. No-op unless outbound deduction is enabled for Shopify.
+  const incoming = await fetchShopifyIncoming(token);
+  const deduction = await applyShopifyIncoming(incoming, session.user?.email || null);
+
   return NextResponse.json({
     success: true,
     upserted: rows.length,
     inserted,
     totalProducts: products.length,
     grouped: new Set(rows.map(r => r.productId)).size,
+    incomingSkus: incoming.size,
+    unitsDeducted: deduction.unitsDeducted,
     syncedAt: syncTime,
   });
 }

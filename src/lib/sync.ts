@@ -22,7 +22,7 @@ export class NoSkusError extends Error {
 /**
  * Refresh FBA quantities for SKUs we already know about.
  *
- * Shared by the user-triggered /api/sync/fast and the nightly cron at
+ * Shared by the nightly cron at
  * /api/sync, which previously ran a different, single-page implementation
  * that read `fulfillableQuantity` instead of `totalQuantity` — so the cron
  * and the button disagreed about what "in stock" meant.
@@ -57,7 +57,12 @@ export async function runFastSync(): Promise<FastSyncResult> {
     const slice = entries.slice(i, i + DB_BATCH);
     await Promise.all(slice.map(([skuUpper, data]) => sql`
       UPDATE inventory SET
-        fba_quantity = ${data.qty},
+        fba_quantity      = ${data.qty},
+        fba_fulfillable   = ${data.fulfillable},
+        fba_inbound       = ${data.inbound},
+        fba_reserved      = ${data.reserved},
+        fba_unfulfillable = ${data.unfulfillable},
+        asin              = COALESCE(NULLIF(${data.asin}, ''), inventory.asin),
         product_name = CASE
           WHEN (inventory.product_name IS NULL OR inventory.product_name = '') AND ${data.name} != ''
           THEN ${data.name}

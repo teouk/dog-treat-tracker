@@ -5,6 +5,8 @@ export type InventoryItem = {
   fbm_quantity: number;
   shop_stock: number;
   shopify_quantity: number;
+  /** Units already on their way to an Amazon fulfilment centre. */
+  fba_inbound: number;
   on_amazon: boolean;
   on_shopify: boolean;
   last_sync_at: string | null;

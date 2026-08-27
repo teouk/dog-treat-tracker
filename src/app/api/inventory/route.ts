@@ -11,6 +11,7 @@ type Raw = {
   fbm_quantity: number;
   shop_stock: number;
   shopify_quantity: number;
+  fba_inbound: number;
   on_amazon: boolean;
   on_shopify: boolean;
   last_sync_at: string | null;
@@ -36,6 +37,7 @@ export async function GET() {
     fbm_quantity: r.fbm_quantity,
     shop_stock: r.shop_stock,
     shopify_quantity: r.shopify_quantity,
+    fba_inbound: r.fba_inbound,
     on_amazon: r.on_amazon,
     on_shopify: r.on_shopify,
     last_sync_at: r.last_sync_at,
