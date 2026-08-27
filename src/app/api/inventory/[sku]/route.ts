@@ -1,8 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getDb } from '@/lib/db';
-import { ensureFinanceColumns } from '@/lib/finance';
+import { ensureSchema } from '@/lib/migrate';
 
+/**
+ * PATCH /api/inventory/:sku — adjust the manually-tracked shop stock.
+ *
+ *   { adjust: -56 }      relative change, applied atomically in SQL
+ *   { shop_stock: 100 }  absolute set
+ *
+ * `adjust` is the preferred form: it computes the new value inside the
+ * UPDATE, so two people adjusting the same SKU at once can't clobber each
+ * other the way a read-modify-write from the client would. Stock is
+ * clamped at zero rather than rejected, and every change is recorded in
+ * stock_adjustments.
+ */
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ sku: string }> }
@@ -10,43 +22,99 @@ export async function PATCH(
   const session = await auth();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  await ensureFinanceColumns();
+  await ensureSchema();
 
   const { sku } = await params;
-  const body = await request.json();
+  const body = await request.json().catch(() => ({}));
   const sql = getDb();
+  const actor = session.user?.email || null;
+  const reason = typeof body.reason === 'string' && body.reason.trim()
+    ? body.reason.trim().slice(0, 200)
+    : null;
 
-  // shop_stock — kept for backwards compatibility with the inventory dashboard
-  if (body.shop_stock !== undefined) {
-    if (typeof body.shop_stock !== 'number' || body.shop_stock < 0) {
-      return NextResponse.json({ error: 'Invalid shop_stock value' }, { status: 400 });
-    }
-    await sql`UPDATE inventory SET shop_stock = ${body.shop_stock} WHERE sku = ${sku}`;
+  const hasAdjust = body.adjust !== undefined;
+  const hasSet = body.shop_stock !== undefined;
+
+  if (hasAdjust && hasSet) {
+    return NextResponse.json(
+      { error: 'Send either adjust or shop_stock, not both' },
+      { status: 400 }
+    );
   }
 
-  // amazon_price / shopify_price / unit_cost — accept null to clear, or number >= 0
-  async function updateMoneyField(field: 'amazon_price' | 'shopify_price' | 'unit_cost', value: any) {
-    if (value === null) {
-      if (field === 'amazon_price') await sql`UPDATE inventory SET amazon_price = NULL WHERE sku = ${sku}`;
-      else if (field === 'shopify_price') await sql`UPDATE inventory SET shopify_price = NULL WHERE sku = ${sku}`;
-      else await sql`UPDATE inventory SET unit_cost = NULL WHERE sku = ${sku}`;
-      return null;
+  if (hasAdjust) {
+    const delta = Number(body.adjust);
+    if (!Number.isInteger(delta) || delta === 0) {
+      return NextResponse.json({ error: 'adjust must be a non-zero integer' }, { status: 400 });
     }
-    if (typeof value !== 'number' || isNaN(value) || value < 0) {
-      return `Invalid ${field} value`;
+    if (Math.abs(delta) > 1_000_000) {
+      return NextResponse.json({ error: 'adjust out of range' }, { status: 400 });
     }
-    if (field === 'amazon_price') await sql`UPDATE inventory SET amazon_price = ${value} WHERE sku = ${sku}`;
-    else if (field === 'shopify_price') await sql`UPDATE inventory SET shopify_price = ${value} WHERE sku = ${sku}`;
-    else await sql`UPDATE inventory SET unit_cost = ${value} WHERE sku = ${sku}`;
-    return null;
+
+    // The CTE reads the pre-update value from the same snapshot as the
+    // UPDATE, so before/after are captured in one atomic statement.
+    const rows = await sql`
+      WITH prev AS (
+        SELECT COALESCE(shop_stock, 0) AS before_qty FROM inventory WHERE sku = ${sku}
+      )
+      UPDATE inventory
+      SET shop_stock = GREATEST(0, COALESCE(shop_stock, 0) + ${delta})
+      WHERE sku = ${sku}
+      RETURNING
+        (SELECT before_qty FROM prev)  AS before_qty,
+        COALESCE(shop_stock, 0)        AS shop_stock
+    ` as Array<{ before_qty: number; shop_stock: number }>;
+
+    if (rows.length === 0) return NextResponse.json({ error: 'SKU not found' }, { status: 404 });
+
+    const before = rows[0].before_qty;
+    const after = rows[0].shop_stock;
+    // Clamping at zero means the applied delta can be smaller than requested.
+    const applied = after - before;
+
+    await sql`
+      INSERT INTO stock_adjustments (sku, delta, before_qty, after_qty, reason, adjusted_by)
+      VALUES (${sku}, ${applied}, ${before}, ${after}, ${reason}, ${actor})
+    `;
+
+    return NextResponse.json({
+      success: true,
+      sku,
+      shop_stock: after,
+      requested: delta,
+      applied,
+      clamped: applied !== delta,
+    });
   }
 
-  for (const field of ['amazon_price', 'shopify_price', 'unit_cost'] as const) {
-    if (body[field] !== undefined) {
-      const err = await updateMoneyField(field, body[field]);
-      if (err) return NextResponse.json({ error: err }, { status: 400 });
+  if (hasSet) {
+    const value = Number(body.shop_stock);
+    if (!Number.isInteger(value) || value < 0 || value > 1_000_000) {
+      return NextResponse.json({ error: 'shop_stock must be an integer >= 0' }, { status: 400 });
     }
+
+    const rows = await sql`
+      WITH prev AS (
+        SELECT COALESCE(shop_stock, 0) AS before_qty FROM inventory WHERE sku = ${sku}
+      )
+      UPDATE inventory
+      SET shop_stock = ${value}
+      WHERE sku = ${sku}
+      RETURNING
+        (SELECT before_qty FROM prev)  AS before_qty,
+        COALESCE(shop_stock, 0)        AS shop_stock
+    ` as Array<{ before_qty: number; shop_stock: number }>;
+
+    if (rows.length === 0) return NextResponse.json({ error: 'SKU not found' }, { status: 404 });
+
+    const before = rows[0].before_qty;
+    await sql`
+      INSERT INTO stock_adjustments (sku, delta, before_qty, after_qty, reason, adjusted_by)
+      VALUES (${sku}, ${value - before}, ${before}, ${value}, ${reason ?? 'set exact'}, ${actor})
+    `;
+
+    return NextResponse.json({ success: true, sku, shop_stock: value, applied: value - before });
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
 }

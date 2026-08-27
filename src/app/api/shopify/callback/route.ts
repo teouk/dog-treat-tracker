@@ -48,7 +48,8 @@ export async function GET(request: NextRequest) {
     await saveShopifyToken(data.access_token, data.scope || '');
 
     return NextResponse.redirect(new URL('/?shopify=connected', request.url));
-  } catch (e: any) {
-    return NextResponse.json({ error: 'Callback failed', detail: e.message }, { status: 500 });
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ error: 'Callback failed', detail }, { status: 500 });
   }
 }

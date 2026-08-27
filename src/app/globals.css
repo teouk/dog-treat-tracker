@@ -7,6 +7,24 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/*
+ * The previous rule hard-coded Arial here, which silently overrode the
+ * Geist font loaded in layout.tsx.
+ */
 body {
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Figures line up in columns — essential for scanning a stock table. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

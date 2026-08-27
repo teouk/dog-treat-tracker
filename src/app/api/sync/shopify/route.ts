@@ -1,14 +1,36 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getDb } from '@/lib/db';
-import {
-  getShopifyToken,
-  SHOPIFY_STORE,
-  SHOPIFY_API_VERSION,
-  ensureChannelColumns,
-} from '@/lib/shopify';
+import { ensureSchema } from '@/lib/migrate';
+import { getShopifyToken, SHOPIFY_STORE, SHOPIFY_API_VERSION } from '@/lib/shopify';
 
 export const maxDuration = 60;
+
+type ShopifyVariant = {
+  sku: string | null;
+  title: string | null;
+  inventory_quantity: number | null;
+  option1: string | null;
+  option2: string | null;
+  option3: string | null;
+};
+type ShopifyProduct = { id: number; title: string | null; variants: ShopifyVariant[] };
+
+/**
+ * Build a variant label from Shopify's option values, falling back to the
+ * variant title. Shopify uses the literal "Default Title" for products that
+ * have no real options — that's noise, not a label.
+ */
+function variantLabel(v: ShopifyVariant): string | null {
+  const opts = [v.option1, v.option2, v.option3]
+    .map(o => (o || '').trim())
+    .filter(o => o && o.toLowerCase() !== 'default title');
+  if (opts.length) return opts.join(' · ');
+
+  const title = (v.title || '').trim();
+  if (title && title.toLowerCase() !== 'default title') return title;
+  return null;
+}
 
 export async function GET() {
   const session = await auth();
@@ -17,10 +39,10 @@ export async function GET() {
   const token = await getShopifyToken();
   if (!token) return NextResponse.json({ error: 'Shopify not connected' }, { status: 400 });
 
-  await ensureChannelColumns();
+  await ensureSchema();
 
   const syncTime = new Date().toISOString();
-  const products: any[] = [];
+  const products: ShopifyProduct[] = [];
   let nextUrl: string | null =
     `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_API_VERSION}/products.json` +
     `?fields=id,title,variants&limit=250`;
@@ -46,47 +68,73 @@ export async function GET() {
       const match = linkHeader?.match(/<([^>]+)>;\s*rel="next"/);
       nextUrl = match ? match[1] : null;
     }
-  } catch (e: any) {
-    return NextResponse.json({ error: 'Fetch failed', detail: e.message }, { status: 500 });
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ error: 'Fetch failed', detail }, { status: 500 });
+  }
+
+  // Flatten to rows, keeping the product id and variant label. That
+  // product->variant structure is Shopify's own and needs no guessing;
+  // the previous version discarded it and stored only the flat SKU list.
+  type Row = {
+    sku: string; name: string; qty: number;
+    productId: string; label: string | null;
+  };
+  const rows: Row[] = [];
+  for (const product of products) {
+    for (const variant of product.variants || []) {
+      const sku = (variant.sku || '').trim();
+      if (!sku) continue;
+      rows.push({
+        sku,
+        name: product.title || '',
+        qty: typeof variant.inventory_quantity === 'number' ? variant.inventory_quantity : 0,
+        productId: String(product.id),
+        label: variantLabel(variant),
+      });
+    }
   }
 
   const sql = getDb();
-  let upserted = 0;
   let inserted = 0;
+  const BATCH = 20;
 
-  for (const product of products) {
-    const productName = product.title || '';
-    for (const variant of product.variants || []) {
-      const rawSku = (variant.sku || '').trim();
-      if (!rawSku) continue;
+  // Batched writes: the previous version awaited one round-trip per
+  // variant, so a 300-variant catalogue meant 300 sequential queries.
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const slice = rows.slice(i, i + BATCH);
+    const results = (await Promise.all(slice.map(r => sql`
+      INSERT INTO inventory (
+        sku, product_name, shopify_quantity, on_amazon, on_shopify,
+        shopify_synced_at, shopify_product_id, variant_label
+      )
+      VALUES (
+        ${r.sku}, ${r.name}, ${r.qty}, FALSE, TRUE,
+        ${syncTime}, ${r.productId}, ${r.label}
+      )
+      ON CONFLICT (sku) DO UPDATE SET
+        shopify_quantity   = EXCLUDED.shopify_quantity,
+        on_shopify         = TRUE,
+        shopify_synced_at  = EXCLUDED.shopify_synced_at,
+        shopify_product_id = EXCLUDED.shopify_product_id,
+        variant_label      = COALESCE(EXCLUDED.variant_label, inventory.variant_label),
+        product_name = CASE
+          WHEN inventory.product_name IS NULL OR inventory.product_name = ''
+          THEN EXCLUDED.product_name
+          ELSE inventory.product_name
+        END
+      RETURNING (xmax = 0) AS inserted
+    `))) as unknown as Array<Array<{ inserted: boolean }>>;
 
-      const qty = typeof variant.inventory_quantity === 'number' ? variant.inventory_quantity : 0;
-
-      const result = await sql`
-        INSERT INTO inventory (sku, product_name, shopify_quantity, on_amazon, on_shopify, shopify_synced_at)
-        VALUES (${rawSku}, ${productName}, ${qty}, FALSE, TRUE, ${syncTime})
-        ON CONFLICT (sku) DO UPDATE SET
-          shopify_quantity = EXCLUDED.shopify_quantity,
-          on_shopify = TRUE,
-          shopify_synced_at = EXCLUDED.shopify_synced_at,
-          product_name = CASE
-            WHEN inventory.product_name IS NULL OR inventory.product_name = ''
-            THEN EXCLUDED.product_name
-            ELSE inventory.product_name
-          END
-        RETURNING (xmax = 0) AS inserted
-      ` as Array<{ inserted: boolean }>;
-
-      upserted++;
-      if (result[0]?.inserted) inserted++;
-    }
+    for (const r of results) if (r[0]?.inserted) inserted++;
   }
 
   return NextResponse.json({
     success: true,
-    upserted,
+    upserted: rows.length,
     inserted,
     totalProducts: products.length,
+    grouped: new Set(rows.map(r => r.productId)).size,
     syncedAt: syncTime,
   });
 }

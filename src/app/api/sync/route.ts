@@ -1,63 +1,35 @@
 export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
-import { fetchAmazonInventory } from '@/lib/amazon';
-import { getDb } from '@/lib/db';
 import { auth } from '@/auth';
+import { runFastSync, NoSkusError } from '@/lib/sync';
+
+export const maxDuration = 60;
 
 /**
- * Daily Amazon sync. Triggered by:
- *  - Vercel cron (sends `Authorization: Bearer ${CRON_SECRET}` automatically)
- *  - An authenticated user from the UI
+ * Nightly Amazon stock refresh. Triggered by Vercel cron (which sends
+ * `Authorization: Bearer ${CRON_SECRET}`) or by a signed-in user.
  *
- * No referer or user-agent based auth — both are trivially forged.
+ * Runs the same code path as the in-app refresh button so the two can
+ * never disagree about stock levels.
  */
 export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;
+  const isCron = !!cronSecret && request.headers.get('authorization') === `Bearer ${cronSecret}`;
 
-  // Cron path: valid only when CRON_SECRET is configured AND the header matches.
-  const isCron = !!cronSecret && authHeader === `Bearer ${cronSecret}`;
-
-  // User path: valid NextAuth session.
-  let isAuthorisedUser = false;
   if (!isCron) {
     const session = await auth();
-    isAuthorisedUser = !!session;
-  }
-
-  if (!isCron && !isAuthorisedUser) {
-    return new NextResponse('Unauthorized', { status: 401 });
+    if (!session) return new NextResponse('Unauthorized', { status: 401 });
   }
 
   try {
-    const liveData = await fetchAmazonInventory();
-
-    if (!liveData || liveData.length === 0) {
-      throw new Error('Amazon returned no items. Check API permissions.');
+    const result = await runFastSync();
+    return NextResponse.json({ ...result, triggeredBy: isCron ? 'cron' : 'user' });
+  } catch (err) {
+    if (err instanceof NoSkusError) {
+      return NextResponse.json({ success: false, error: 'NO_SKUS', message: err.message }, { status: 400 });
     }
-
-    const syncTime = new Date().toISOString();
-
-    const sql = getDb();
-    for (const item of liveData) {
-      await sql`
-        INSERT INTO inventory (sku, product_name, fba_quantity, last_sync_at)
-        VALUES (${item.sku}, ${item.product_name}, ${item.fulfillable}, ${syncTime})
-        ON CONFLICT (sku) DO UPDATE SET
-          product_name = EXCLUDED.product_name,
-          fba_quantity = EXCLUDED.fba_quantity,
-          last_sync_at = EXCLUDED.last_sync_at
-      `;
-    }
-
-    return NextResponse.json({
-      success: true,
-      count: liveData.length,
-      timestamp: syncTime,
-      triggeredBy: isCron ? 'cron' : 'user',
-    });
-  } catch (error: any) {
-    console.error('Sync Route Crash:', error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error('Sync Route Crash:', message);
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }

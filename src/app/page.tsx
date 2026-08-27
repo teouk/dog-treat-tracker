@@ -1,600 +1,663 @@
 'use client';
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import Login from '@/components/Login';
 import ThemeToggle from '@/components/ThemeToggle';
-import Nav from '@/components/Nav';
+import StockAdjuster from '@/components/StockAdjuster';
+import GroupNameEditor from '@/components/GroupNameEditor';
+import {
+  type InventoryItem, type Channel, type StatusFilter, type Status, type ProductGroup,
+  LOW_STOCK_THRESHOLD, statusOf, channelTotal, buildGroups,
+} from '@/lib/inventory-view';
 
-type InventoryItem = {
-  sku: string;
-  product_name: string;
-  fba_quantity: number;
-  fbm_quantity: number;
-  shop_stock: number;
-  shopify_quantity: number;
-  on_amazon: boolean;
-  on_shopify: boolean;
-  last_sync_at: string | null;
-  shopify_synced_at: string | null;
+const STATUS_STYLES: Record<Status, { dot: string; text: string; label: string }> = {
+  in:  { dot: 'bg-emerald-500', text: 'text-emerald-700 dark:text-emerald-400', label: 'In stock' },
+  low: { dot: 'bg-amber-500',   text: 'text-amber-700 dark:text-amber-400',     label: 'Low' },
+  out: { dot: 'bg-red-500',     text: 'text-red-700 dark:text-red-400',         label: 'Out' },
 };
 
-type StatusFilter = 'all' | 'in' | 'low' | 'out';
-type Channel = 'all' | 'amazon' | 'shopify';
-
-const LOW_STOCK_THRESHOLD = 10;
-
-function statusOf(total: number): 'in' | 'low' | 'out' {
-  if (total === 0) return 'out';
-  if (total <= LOW_STOCK_THRESHOLD) return 'low';
-  return 'in';
-}
-
-function channelTotal(item: InventoryItem, channel: Channel): number {
-  const fba = item.fba_quantity || 0;
-  const fbm = item.fbm_quantity || 0;
-  const shop = item.shop_stock || 0;
-  const shopify = item.shopify_quantity || 0;
-  if (channel === 'amazon') return fba + fbm + shop;
-  if (channel === 'shopify') return shopify;
-  return fba + fbm + shop + shopify;
-}
-
-function ShopStockEditor({ value, onSave }: { value: number; onSave: (v: number) => void }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(String(value));
-
-  function commit() {
-    const parsed = parseInt(draft, 10);
-    if (!isNaN(parsed) && parsed >= 0) onSave(parsed);
-    else setDraft(String(value));
-    setEditing(false);
-  }
-
-  if (editing) {
-    return (
-      <input
-        type="number"
-        min="0"
-        autoFocus
-        className="w-16 text-center font-semibold text-emerald-600 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-800 rounded-md py-0.5 text-sm outline-none focus:ring-2 focus:ring-emerald-400"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setDraft(String(value)); setEditing(false); } }}
-      />
-    );
-  }
-
+function StatusPill({ status }: { status: Status }) {
+  const s = STATUS_STYLES[status];
   return (
-    <div className="inline-flex items-center gap-1.5">
-      <button onClick={() => onSave(Math.max(0, value - 1))} className="w-6 h-6 rounded-md border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors flex items-center justify-center text-sm font-bold">-</button>
-      <button
-        onClick={() => { setDraft(String(value)); setEditing(true); }}
-        className="font-semibold text-emerald-600 dark:text-emerald-400 w-8 text-center hover:bg-emerald-50 dark:hover:bg-emerald-900/30 rounded cursor-text"
-        title="Click to set exact amount"
-      >{value}</button>
-      <button onClick={() => onSave(value + 1)} className="w-6 h-6 rounded-md border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 hover:text-slate-700 dark:hover:text-slate-200 transition-colors flex items-center justify-center text-sm font-bold">+</button>
-    </div>
+    <span className={`inline-flex items-center gap-1.5 text-xs font-semibold ${s.text}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+      {s.label}
+    </span>
   );
 }
 
-function StockBadge({ total }: { total: number }) {
-  const s = statusOf(total);
-  if (s === 'out') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400">Out of Stock</span>;
-  if (s === 'low') return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Low Stock</span>;
-  return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400">In Stock</span>;
-}
-
-function StatCard({ label, value, color, active, onClick }: { label: string; value: number; color: string; active: boolean; onClick: () => void }) {
-  const base: Record<string, string> = {
-    slate: 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100',
-    emerald: 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400',
-    amber: 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400',
-    red: 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400',
-  };
-  const ring: Record<string, string> = {
-    slate: 'ring-slate-400 dark:ring-slate-500',
-    emerald: 'ring-emerald-500',
-    amber: 'ring-amber-500',
-    red: 'ring-red-500',
+function StatTile({ label, value, sub, tone, active, onClick }: {
+  label: string; value: number; sub?: string; tone: Status | 'all'; active: boolean; onClick: () => void;
+}) {
+  const tones: Record<string, string> = {
+    all:  'text-slate-900 dark:text-slate-100',
+    in:   'text-emerald-600 dark:text-emerald-400',
+    low:  'text-amber-600 dark:text-amber-400',
+    out:  'text-red-600 dark:text-red-400',
   };
   return (
     <button
       onClick={onClick}
-      className={`text-left rounded-2xl border p-4 transition-all hover:scale-[1.02] hover:shadow-md cursor-pointer ${base[color]} ${active ? `ring-2 ${ring[color]} shadow-md` : ''}`}
+      className={`rounded-xl border px-4 py-3 text-left transition-all ${
+        active
+          ? 'border-slate-900 dark:border-slate-100 bg-white dark:bg-slate-900 shadow-sm'
+          : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-slate-300 dark:hover:border-slate-700'
+      }`}
     >
-      <p className="text-2xl font-black">{value}</p>
-      <p className="text-xs font-semibold opacity-60 mt-0.5">{label}</p>
+      <p className={`tnum text-2xl font-bold ${tones[tone]}`}>{value}</p>
+      <p className="mt-0.5 text-xs font-medium text-slate-500 dark:text-slate-400">{label}</p>
+      {sub && <p className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">{sub}</p>}
     </button>
   );
 }
 
+function Num({ value, muted }: { value: number; muted?: boolean }) {
+  return (
+    <span className={`tnum text-sm ${
+      muted && value === 0
+        ? 'text-slate-300 dark:text-slate-700'
+        : 'font-medium text-slate-700 dark:text-slate-300'
+    }`}>
+      {value}
+    </span>
+  );
+}
+
 export default function InventoryDashboard() {
-  const { status } = useSession();
+  const { status: authStatus } = useSession();
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [shopifyLoading, setShopifyLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
+  const [amazonLoading, setAmazonLoading] = useState(false);
+  const [shopifyLoading, setShopifyLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [channel, setChannel] = useState<Channel>('all');
   const [shopifyConnected, setShopifyConnected] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (status === 'authenticated') {
-      fetchInventory();
-      checkShopifyStatus();
-    }
-  }, [status]);
+    if (authStatus !== 'authenticated') return;
+    let cancelled = false;
 
-  async function checkShopifyStatus() {
-    try {
-      const res = await fetch('/api/shopify/status');
-      const data = await res.json();
-      setShopifyConnected(!!data.connected);
-    } catch {}
-  }
+    (async () => {
+      try {
+        const [invRes, shopRes] = await Promise.all([
+          fetch('/api/inventory'),
+          fetch('/api/shopify/status'),
+        ]);
+        if (cancelled) return;
+        const inv = await invRes.json();
+        if (Array.isArray(inv)) setInventory(inv);
+        const shop = await shopRes.json().catch(() => ({}));
+        setShopifyConnected(!!shop.connected);
+      } finally {
+        if (!cancelled) setFetching(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [authStatus]);
 
   async function fetchInventory() {
-    setFetching(true);
     const res = await fetch('/api/inventory');
     const data = await res.json();
     if (Array.isArray(data)) setInventory(data);
-    setFetching(false);
+  }
+
+  function flash(message: string, ms = 4500) {
+    setSyncStatus(message);
+    setTimeout(() => setSyncStatus(''), ms);
   }
 
   async function triggerAmazonSync() {
-    setLoading(true);
-    setSyncStatus('Refreshing Amazon FBA stock...');
+    setAmazonLoading(true);
+    setSyncStatus('Refreshing Amazon FBA stock…');
     try {
       const res = await fetch('/api/sync/fast');
+      const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        const result = await res.json();
         await fetchInventory();
-        setSyncStatus(
-          `Refreshed FBA: ${result.fbaReturnedByApi || 0} of ${result.totalFbaSkusInDb || 0} SKUs` +
-          (result.failedBatches ? ` (${result.failedBatches} batches failed — try again)` : '')
+        flash(
+          `Refreshed ${body.fbaReturnedByApi || 0} of ${body.totalFbaSkusInDb || 0} SKUs` +
+          (body.failedBatches ? ` — ${body.failedBatches} batches failed, try again` : '')
         );
-        setTimeout(() => setSyncStatus(''), 4500);
+      } else if (body.error === 'NO_SKUS') {
+        setSyncStatus('No SKUs yet — running a full refresh instead…');
+        await triggerAmazonFullSync();
+        return;
       } else {
-        const body = await res.json().catch(() => ({}));
-        if (body.error === 'NO_SKUS') {
-          // First-time user with empty DB — fall through to full sync
-          setSyncStatus('First sync detected, running Full Refresh instead...');
-          await triggerAmazonFullSync();
-          return;
-        }
-        throw new Error(body.error || body.message || 'Sync failed');
+        throw new Error(body.error || 'Sync failed');
       }
-    } catch (e: any) {
-      setSyncStatus(e.message || 'Sync failed');
-      setTimeout(() => setSyncStatus(''), 5000);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Sync failed', 5000);
     }
-    setLoading(false);
+    setAmazonLoading(false);
   }
 
   async function triggerAmazonFullSync() {
-    setLoading(true);
-    setSyncStatus('Full Refresh: requesting Amazon report (this can take 2-3 min)...');
+    setAmazonLoading(true);
+    setSyncStatus('Full refresh: requesting Amazon report (2–3 min)…');
     try {
-      let attempts = 0;
-      let pendingReportId = '';
-      let completed = false;
-      while (attempts < 5) {
-        attempts++;
-        const url = pendingReportId
-          ? `/api/sync/full?reportId=${encodeURIComponent(pendingReportId)}`
+      let reportId = '';
+      let done = false;
+      for (let attempt = 1; attempt <= 5 && !done; attempt++) {
+        const url = reportId
+          ? `/api/sync/full?reportId=${encodeURIComponent(reportId)}`
           : '/api/sync/full';
         const res = await fetch(url);
         if (res.ok) {
-          const result = await res.json();
+          const body = await res.json();
           await fetchInventory();
-          setSyncStatus(`Full sync complete — ${result.upserted || 0} products`);
-          setTimeout(() => setSyncStatus(''), 4000);
-          completed = true;
-          break;
-        }
-        if (res.status === 408) {
+          flash(
+            `Full sync complete — ${body.upserted || 0} listings` +
+            (body.variationFamilies ? `, ${body.variationFamilies} variation families` : '')
+          );
+          done = true;
+        } else if (res.status === 408) {
           const body = await res.json().catch(() => ({}));
-          pendingReportId = body.reportId || pendingReportId;
-          setSyncStatus(`Amazon still preparing report... continuing (${attempts}/5)`);
-          continue;
+          reportId = body.reportId || reportId;
+          setSyncStatus(`Amazon is still preparing the report… (${attempt}/5)`);
+        } else {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || 'Sync failed');
         }
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Sync failed');
       }
-      if (!completed) {
-        setSyncStatus('Amazon report took too long. Try again in a few minutes.');
-        setTimeout(() => setSyncStatus(''), 6000);
-      }
-    } catch (e: any) {
-      setSyncStatus(e.message || 'Sync failed');
-      setTimeout(() => setSyncStatus(''), 5000);
+      if (!done) flash('Amazon report took too long. Try again shortly.', 6000);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Sync failed', 5000);
     }
-    setLoading(false);
+    setAmazonLoading(false);
   }
 
   async function triggerShopifySync() {
     setShopifyLoading(true);
-    setSyncStatus('Syncing Shopify...');
+    setSyncStatus('Syncing Shopify…');
     try {
       const res = await fetch('/api/sync/shopify');
-      if (res.ok) {
-        const result = await res.json();
-        await fetchInventory();
-        setSyncStatus(`Synced ${result.upserted || 0} Shopify variants${result.inserted ? ` (${result.inserted} new)` : ''}`);
-        setTimeout(() => setSyncStatus(''), 4000);
-      } else {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Sync failed');
-      }
-    } catch (e: any) {
-      setSyncStatus(e.message || 'Sync failed');
-      setTimeout(() => setSyncStatus(''), 5000);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'Sync failed');
+      await fetchInventory();
+      flash(`Synced ${body.upserted || 0} variants across ${body.grouped || 0} products`);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Sync failed', 5000);
     }
     setShopifyLoading(false);
   }
 
   async function disconnectShopify() {
-    if (!confirm('Disconnect Shopify? You will need to re-authorize to sync again.')) return;
+    if (!confirm('Disconnect Shopify? You will need to re-authorise to sync again.')) return;
     await fetch('/api/shopify/disconnect', { method: 'POST' });
     setShopifyConnected(false);
   }
 
-  async function setShopStock(sku: string, newStock: number) {
-    setInventory(prev => prev.map(i => i.sku === sku ? { ...i, shop_stock: newStock } : i));
-    await fetch(`/api/inventory/${encodeURIComponent(sku)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ shop_stock: newStock }),
+  function applyStock(sku: string, next: number) {
+    setInventory(prev => prev.map(i => (i.sku === sku ? { ...i, shop_stock: next } : i)));
+  }
+
+  function applyGroupName(groupKey: string, name: string, isOverride: boolean) {
+    setInventory(prev => prev.map(i =>
+      i.group_key === groupKey
+        ? { ...i, group_name: name || i.group_name, group_name_is_override: isOverride }
+        : i
+    ));
+    if (!isOverride) fetchInventory();
+  }
+
+  function toggle(key: string) {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
     });
   }
 
-  // Filter by channel membership first
   const channelItems = useMemo(() => {
     if (channel === 'amazon') return inventory.filter(i => i.on_amazon !== false);
     if (channel === 'shopify') return inventory.filter(i => i.on_shopify === true);
     return inventory;
   }, [inventory, channel]);
 
+  const allGroups = useMemo(() => buildGroups(channelItems, channel), [channelItems, channel]);
+
   const stats = useMemo(() => {
-    let inStock = 0, lowStock = 0, outOfStock = 0;
-    for (const item of channelItems) {
-      const s = statusOf(channelTotal(item, channel));
-      if (s === 'out') outOfStock++;
-      else if (s === 'low') lowStock++;
+    let inStock = 0, low = 0, out = 0;
+    for (const g of allGroups) {
+      if (g.status === 'out') out++;
+      else if (g.status === 'low') low++;
       else inStock++;
     }
-    return { total: channelItems.length, inStock, lowStock, outOfStock };
-  }, [channelItems, channel]);
+    return { total: allGroups.length, variants: channelItems.length, inStock, low, out };
+  }, [allGroups, channelItems]);
+
+  const groups = useMemo(() => {
+    let list = allGroups;
+    const q = searchQuery.trim().toLowerCase();
+
+    if (q) {
+      list = list.filter(g =>
+        g.name.toLowerCase().includes(q) ||
+        g.items.some(i =>
+          i.sku.toLowerCase().includes(q) ||
+          (i.variant_label || '').toLowerCase().includes(q) ||
+          (i.product_name || '').toLowerCase().includes(q)
+        )
+      );
+    }
+    if (statusFilter !== 'all') list = list.filter(g => g.status === statusFilter);
+    return list;
+  }, [allGroups, searchQuery, statusFilter]);
+
+  // A search hit inside a collapsed family would otherwise be invisible.
+  const openKeys = useMemo(
+    () => (searchQuery.trim() ? new Set(groups.map(g => g.key)) : expanded),
+    [searchQuery, groups, expanded]
+  );
 
   const lastSync = useMemo(() => {
     const field = channel === 'shopify' ? 'shopify_synced_at' : 'last_sync_at';
-    const dates = inventory.map(i => i[field as 'last_sync_at']).filter(Boolean) as string[];
-    if (dates.length === 0) return null;
-    return new Date(Math.max(...dates.map(d => new Date(d).getTime())));
+    const times = inventory
+      .map(i => i[field])
+      .filter((d): d is string => !!d)
+      .map(d => new Date(d).getTime());
+    return times.length ? new Date(Math.max(...times)) : null;
   }, [inventory, channel]);
 
-  const filtered = useMemo(() => {
-    let items = channelItems.slice();
+  if (authStatus === 'loading') {
+    return (
+      <div className="grid min-h-screen place-items-center bg-slate-50 dark:bg-slate-950">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-300 border-t-slate-800 dark:border-slate-700 dark:border-t-slate-200" />
+      </div>
+    );
+  }
+  if (authStatus === 'unauthenticated') return <Login />;
 
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      items = items.filter(i =>
-        (i.product_name || '').toLowerCase().includes(q) ||
-        i.sku.toLowerCase().includes(q)
-      );
-    }
+  const showAmazon = channel !== 'shopify';
+  const showShopify = channel !== 'amazon';
+  const colSpan = 3 + (showAmazon ? 3 : 0) + (showShopify ? 1 : 0);
 
-    if (statusFilter !== 'all') {
-      items = items.filter(i => statusOf(channelTotal(i, channel)) === statusFilter);
-    }
-
-    const order = { in: 0, low: 1, out: 2 } as const;
-    items.sort((a, b) => {
-      const oa = order[statusOf(channelTotal(a, channel))];
-      const ob = order[statusOf(channelTotal(b, channel))];
-      if (oa !== ob) return oa - ob;
-      return (a.product_name || a.sku).localeCompare(b.product_name || b.sku);
-    });
-
-    return items;
-  }, [channelItems, searchQuery, statusFilter, channel]);
-
-  if (status === 'loading') return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
-      <div className="w-6 h-6 border-2 border-slate-300 dark:border-slate-700 border-t-slate-800 dark:border-t-slate-200 rounded-full animate-spin" />
-    </div>
-  );
-  if (status === 'unauthenticated') return <Login />;
-
-  const showAmazonCols = channel !== 'shopify';
-  const showShopifyCol = channel !== 'amazon';
-
-  const channelTabs: Array<{ key: Channel; label: string; icon: string }> = [
-    { key: 'all', label: 'All Channels', icon: '🌐' },
-    { key: 'amazon', label: 'Amazon', icon: '📦' },
-    { key: 'shopify', label: 'Shopify', icon: '🛍️' },
+  const channelTabs: Array<{ key: Channel; label: string }> = [
+    { key: 'all', label: 'All channels' },
+    { key: 'amazon', label: 'Amazon' },
+    { key: 'shopify', label: 'Shopify' },
   ];
+
+  const syncBtn =
+    'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white ' +
+    'transition-colors disabled:cursor-not-allowed disabled:opacity-50';
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      {/* Header */}
-      <header className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-4 min-w-0">
-            <h1 className="text-base sm:text-lg font-black tracking-tight text-slate-900 dark:text-slate-100 truncate">
-              Glorious Treats <span className="text-blue-600 dark:text-blue-400">&amp; Chews</span>
-            </h1>
-            <Nav />
+      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
+          <h1 className="truncate text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100 sm:text-base">
+            Glorious Treats <span className="text-blue-600 dark:text-blue-400">&amp; Chews</span>
+            <span className="ml-2 hidden font-medium text-slate-400 dark:text-slate-500 sm:inline">Inventory</span>
+          </h1>
+
+          <div className="flex shrink-0 items-center gap-2">
             {syncStatus && (
-              <span className="hidden xl:inline text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2.5 py-1 rounded-full whitespace-nowrap">
+              <span className="hidden max-w-xs truncate rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 lg:inline">
                 {syncStatus}
               </span>
             )}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Amazon Sync */}
-            {(channel === 'all' || channel === 'amazon') && (
+
+            {showAmazon && (
               <button
                 onClick={triggerAmazonSync}
-                disabled={loading}
-                className="flex items-center gap-1.5 bg-orange-600 text-white px-3 sm:px-4 py-2 rounded-lg font-semibold text-sm hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                title="Sync Amazon inventory"
+                disabled={amazonLoading}
+                className={`${syncBtn} bg-orange-600 hover:bg-orange-700`}
+                title="Refresh Amazon FBA stock"
               >
-                {loading ? (
-                  <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> <span className="hidden sm:inline">Amazon...</span></>
-                ) : (
-                  <><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg> <span className="hidden sm:inline">Amazon</span></>
-                )}
+                {amazonLoading
+                  ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  : <span aria-hidden>⟳</span>}
+                <span className="hidden sm:inline">Amazon</span>
               </button>
             )}
 
-            {/* Shopify Sync / Connect */}
-            {(channel === 'all' || channel === 'shopify') && (
-              shopifyConnected ? (
-                <button
-                  onClick={triggerShopifySync}
-                  disabled={shopifyLoading}
-                  className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 sm:px-4 py-2 rounded-lg font-semibold text-sm hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  title="Sync Shopify inventory"
-                >
-                  {shopifyLoading ? (
-                    <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> <span className="hidden sm:inline">Shopify...</span></>
-                  ) : (
-                    <><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg> <span className="hidden sm:inline">Shopify</span></>
-                  )}
-                </button>
-              ) : (
-                <a
-                  href="/api/shopify/install"
-                  className="flex items-center gap-1.5 bg-emerald-600 text-white px-3 sm:px-4 py-2 rounded-lg font-semibold text-sm hover:bg-emerald-700 transition-colors"
-                  title="Connect Shopify store"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                  <span className="hidden sm:inline">Connect Shopify</span>
-                </a>
-              )
-            )}
+            {showShopify && (shopifyConnected ? (
+              <button
+                onClick={triggerShopifySync}
+                disabled={shopifyLoading}
+                className={`${syncBtn} bg-emerald-600 hover:bg-emerald-700`}
+                title="Refresh Shopify stock"
+              >
+                {shopifyLoading
+                  ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  : <span aria-hidden>⟳</span>}
+                <span className="hidden sm:inline">Shopify</span>
+              </button>
+            ) : (
+              <a href="/api/shopify/install" className={`${syncBtn} bg-emerald-600 hover:bg-emerald-700`}>
+                <span className="hidden sm:inline">Connect Shopify</span>
+                <span className="sm:hidden">Shopify</span>
+              </a>
+            ))}
 
             <ThemeToggle />
             <button
               onClick={() => signOut()}
-              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
               title="Sign out"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
             </button>
           </div>
         </div>
+
         {syncStatus && (
-          <div className="xl:hidden bg-blue-50 dark:bg-blue-900/30 px-4 py-2 text-xs font-medium text-blue-600 dark:text-blue-400 text-center">
+          <div className="bg-blue-50 px-4 py-1.5 text-center text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 lg:hidden">
             {syncStatus}
           </div>
         )}
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-        {/* Channel Selector */}
-        <div className="flex gap-2 bg-white dark:bg-slate-900 p-1.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
-          {channelTabs.map(tab => (
-            <button
-              key={tab.key}
-              onClick={() => { setChannel(tab.key); setStatusFilter('all'); }}
-              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                channel === tab.key
-                  ? 'bg-blue-600 text-white shadow-md'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <span>{tab.icon}</span>
-              <span>{tab.label}</span>
-            </button>
-          ))}
+      <main className="mx-auto max-w-6xl space-y-4 px-4 py-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-800 dark:bg-slate-900">
+            {channelTabs.map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => { setChannel(tab.key); setStatusFilter('all'); }}
+                className={`rounded-md px-3 py-1.5 text-sm font-semibold transition-colors ${
+                  channel === tab.key
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {lastSync && (
+            <p className="text-xs text-slate-400 dark:text-slate-500">
+              Last {channel === 'shopify' ? 'Shopify' : 'Amazon'} sync{' '}
+              {lastSync.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} at{' '}
+              {lastSync.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+            </p>
+          )}
         </div>
 
-        {/* Shopify connection notice (in Shopify mode but not connected) */}
         {channel === 'shopify' && !shopifyConnected && (
-          <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-xl p-5 text-center">
-            <p className="text-emerald-800 dark:text-emerald-300 font-semibold mb-2">Shopify is not connected yet</p>
-            <p className="text-sm text-emerald-700 dark:text-emerald-400 mb-4">Connect your Shopify store to sync inventory.</p>
-            <a
-              href="/api/shopify/install"
-              className="inline-flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg font-semibold text-sm hover:bg-emerald-700 transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-center dark:border-emerald-800 dark:bg-emerald-900/20">
+            <p className="font-semibold text-emerald-800 dark:text-emerald-300">Shopify is not connected</p>
+            <p className="mt-1 text-sm text-emerald-700 dark:text-emerald-400">
+              Connect your store to sync stock and group variants automatically.
+            </p>
+            <a href="/api/shopify/install" className="mt-3 inline-block rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
               Connect Shopify
             </a>
           </div>
         )}
 
-        {/* Stats Row */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <StatCard label="Total Products" value={stats.total} color="slate" active={statusFilter === 'all'} onClick={() => setStatusFilter('all')} />
-          <StatCard label="In Stock" value={stats.inStock} color="emerald" active={statusFilter === 'in'} onClick={() => setStatusFilter('in')} />
-          <StatCard label="Low Stock" value={stats.lowStock} color="amber" active={statusFilter === 'low'} onClick={() => setStatusFilter('low')} />
-          <StatCard label="Out of Stock" value={stats.outOfStock} color="red" active={statusFilter === 'out'} onClick={() => setStatusFilter('out')} />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatTile label="Products" value={stats.total} sub={`${stats.variants} SKUs`} tone="all" active={statusFilter === 'all'} onClick={() => setStatusFilter('all')} />
+          <StatTile label="In stock" value={stats.inStock} tone="in" active={statusFilter === 'in'} onClick={() => setStatusFilter('in')} />
+          <StatTile label="Low stock" value={stats.low} sub={`≤ ${LOW_STOCK_THRESHOLD} units`} tone="low" active={statusFilter === 'low'} onClick={() => setStatusFilter('low')} />
+          <StatTile label="Out of stock" value={stats.out} tone="out" active={statusFilter === 'out'} onClick={() => setStatusFilter('out')} />
         </div>
 
-        {/* Search */}
         <div className="relative">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          <svg className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
           <input
-            type="text"
-            placeholder="Search by product name or SKU..."
-            className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+            type="search"
+            placeholder="Search product, variant or SKU…"
+            className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={e => setSearchQuery(e.target.value)}
           />
-          {searchQuery && (
-            <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
-          )}
         </div>
 
-        {/* Last sync + actions */}
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          {lastSync ? (
-            <p className="text-xs text-slate-400 dark:text-slate-500">
-              Last {channel === 'shopify' ? 'Shopify' : 'Amazon'} sync: {lastSync.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} at {lastSync.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
-            </p>
-          ) : <span />}
-          <div className="flex items-center gap-3">
-            {(channel === 'all' || channel === 'amazon') && (
-              <button
-                onClick={triggerAmazonFullSync}
-                disabled={loading}
-                className="text-xs text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors disabled:opacity-50"
-                title="Run a full report-based refresh (slow). Updates SKU list and FBM quantities. Runs automatically daily."
-              >
-                Full Refresh (slow)
-              </button>
-            )}
-            {channel === 'shopify' && shopifyConnected && (
-              <button onClick={disconnectShopify} className="text-xs text-slate-400 hover:text-red-500 transition-colors">
-                Disconnect Shopify
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Inventory Table — Desktop */}
-        <div className="hidden md:block bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-          <table className="w-full text-sm">
+        {/* Desktop grid */}
+        <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 md:block">
+          <table className="w-full">
             <thead>
-              <tr className="border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50">
-                <th className="text-left py-3 px-4 font-semibold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Product</th>
-                {showAmazonCols && <th className="text-center py-3 px-3 font-semibold text-orange-500 dark:text-orange-400 text-xs uppercase tracking-wider">FBA</th>}
-                {showAmazonCols && <th className="text-center py-3 px-3 font-semibold text-blue-500 dark:text-blue-400 text-xs uppercase tracking-wider">FBM</th>}
-                {showAmazonCols && <th className="text-center py-3 px-3 font-semibold text-emerald-500 dark:text-emerald-400 text-xs uppercase tracking-wider">Shop</th>}
-                {showShopifyCol && <th className="text-center py-3 px-3 font-semibold text-fuchsia-500 dark:text-fuchsia-400 text-xs uppercase tracking-wider">Shopify</th>}
-                <th className="text-center py-3 px-3 font-semibold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Total</th>
-                <th className="text-center py-3 px-3 font-semibold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Status</th>
+              <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400">
+                <th className="px-4 py-2.5 text-left font-semibold">Product</th>
+                {showAmazon && <th className="px-3 py-2.5 text-right font-semibold">FBA</th>}
+                {showAmazon && <th className="px-3 py-2.5 text-right font-semibold">FBM</th>}
+                {showAmazon && <th className="px-3 py-2.5 text-center font-semibold">Shop</th>}
+                {showShopify && <th className="px-3 py-2.5 text-right font-semibold">Shopify</th>}
+                <th className="px-3 py-2.5 text-right font-semibold">Total</th>
+                <th className="px-4 py-2.5 text-left font-semibold">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
-              {filtered.map(item => {
-                const total = channelTotal(item, channel);
-                const name = item.product_name?.trim();
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {groups.map(group => {
+                const single = group.items.length === 1;
+                const open = openKeys.has(group.key);
                 return (
-                  <tr key={item.sku} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
-                    <td className="py-3 px-4">
-                      {name ? (
-                        <>
-                          <p className="font-semibold text-slate-800 dark:text-slate-200 leading-tight">{name}</p>
-                          <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5 font-mono">{item.sku}</p>
-                        </>
-                      ) : (
-                        <p className="font-semibold text-slate-800 dark:text-slate-200 leading-tight font-mono">{item.sku}</p>
-                      )}
-                    </td>
-                    {showAmazonCols && <td className="text-center py-3 px-3"><span className="font-semibold text-orange-600 dark:text-orange-400">{item.fba_quantity || 0}</span></td>}
-                    {showAmazonCols && <td className="text-center py-3 px-3"><span className="font-semibold text-blue-600 dark:text-blue-400">{item.fbm_quantity || 0}</span></td>}
-                    {showAmazonCols && <td className="text-center py-3 px-3"><ShopStockEditor value={item.shop_stock || 0} onSave={(v) => setShopStock(item.sku, v)} /></td>}
-                    {showShopifyCol && <td className="text-center py-3 px-3"><span className="font-semibold text-fuchsia-600 dark:text-fuchsia-400">{item.shopify_quantity || 0}</span></td>}
-                    <td className="text-center py-3 px-3">
-                      <span className={`font-bold text-lg ${total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-800 dark:text-slate-200'}`}>
-                        {total}
-                      </span>
-                    </td>
-                    <td className="text-center py-3 px-3">
-                      <StockBadge total={total} />
-                    </td>
-                  </tr>
+                  <GroupRows
+                    key={group.key}
+                    group={group}
+                    single={single}
+                    open={open}
+                    channel={channel}
+                    showAmazon={showAmazon}
+                    showShopify={showShopify}
+                    onToggle={toggle}
+                    onStock={applyStock}
+                    onRenamed={applyGroupName}
+                  />
                 );
               })}
+              {groups.length === 0 && (
+                <tr>
+                  <td colSpan={colSpan} className="px-4 py-14 text-center text-sm text-slate-400 dark:text-slate-500">
+                    {fetching ? 'Loading inventory…'
+                      : allGroups.length === 0 ? 'No products yet — run a sync to import your catalogue.'
+                      : 'Nothing matches those filters.'}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
-          {filtered.length === 0 && (
-            <div className="py-12 text-center text-slate-400 dark:text-slate-500 text-sm">
-              {fetching ? 'Loading inventory...' : channelItems.length === 0 ? `No ${channel === 'all' ? '' : channel + ' '}products yet.` : 'No products match your search.'}
-            </div>
-          )}
         </div>
 
-        {/* Inventory Cards — Mobile */}
-        <div className="md:hidden space-y-3">
-          {filtered.map(item => {
-            const total = channelTotal(item, channel);
-            const name = item.product_name?.trim();
+        {/* Mobile cards */}
+        <div className="space-y-2.5 md:hidden">
+          {groups.map(group => {
+            const open = openKeys.has(group.key);
+            const single = group.items.length === 1;
             return (
-              <div key={item.sku} className={`bg-white dark:bg-slate-900 rounded-xl border p-4 ${total === 0 ? 'border-red-200 dark:border-red-800' : total <= LOW_STOCK_THRESHOLD ? 'border-amber-200 dark:border-amber-800' : 'border-slate-200 dark:border-slate-800'}`}>
-                <div className="flex justify-between items-start mb-3">
-                  <div className="flex-1 min-w-0 mr-3">
-                    {name ? (
-                      <>
-                        <p className="font-semibold text-slate-800 dark:text-slate-200 text-sm leading-tight truncate">{name}</p>
-                        <p className="text-xs text-slate-400 dark:text-slate-500 font-mono mt-0.5">{item.sku}</p>
-                      </>
-                    ) : (
-                      <p className="font-semibold text-slate-800 dark:text-slate-200 text-sm leading-tight truncate font-mono">{item.sku}</p>
-                    )}
+              <div key={group.key} className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+                <button
+                  onClick={() => !single && toggle(group.key)}
+                  className="flex w-full items-start justify-between gap-3 p-3.5 text-left"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{group.name}</p>
+                    <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                      {single ? group.items[0].sku : `${group.items.length} variations`}
+                      {group.outCount > 0 && <span className="ml-1.5 text-red-500">· {group.outCount} out</span>}
+                      {group.lowCount > 0 && <span className="ml-1.5 text-amber-500">· {group.lowCount} low</span>}
+                    </p>
                   </div>
-                  <div className="text-right shrink-0">
-                    <p className={`text-2xl font-black ${total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-800 dark:text-slate-200'}`}>{total}</p>
-                    <StockBadge total={total} />
+                  <div className="shrink-0 text-right">
+                    <p className="tnum text-xl font-bold text-slate-900 dark:text-slate-100">{group.total}</p>
+                    <StatusPill status={group.status} />
                   </div>
-                </div>
-                <div className={`grid gap-2 text-center ${channel === 'all' ? 'grid-cols-4' : channel === 'amazon' ? 'grid-cols-3' : 'grid-cols-1'}`}>
-                  {showAmazonCols && (
-                    <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg py-2">
-                      <p className="text-[10px] font-bold text-orange-400 uppercase">FBA</p>
-                      <p className="font-bold text-orange-700 dark:text-orange-400 text-sm">{item.fba_quantity || 0}</p>
+                </button>
+
+                {single ? (
+                  showAmazon && (
+                    <div className="flex items-center justify-between border-t border-slate-100 px-3.5 py-2.5 dark:border-slate-800">
+                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Shop stock</span>
+                      <StockAdjuster sku={group.items[0].sku} value={group.items[0].shop_stock || 0} onChange={applyStock} />
                     </div>
-                  )}
-                  {showAmazonCols && (
-                    <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg py-2">
-                      <p className="text-[10px] font-bold text-blue-400 uppercase">FBM</p>
-                      <p className="font-bold text-blue-700 dark:text-blue-400 text-sm">{item.fbm_quantity || 0}</p>
-                    </div>
-                  )}
-                  {showAmazonCols && (
-                    <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg py-2">
-                      <p className="text-[10px] font-bold text-emerald-400 uppercase">Shop</p>
-                      <div className="flex items-center justify-center mt-0.5">
-                        <ShopStockEditor value={item.shop_stock || 0} onSave={(v) => setShopStock(item.sku, v)} />
+                  )
+                ) : open && (
+                  <div className="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
+                    {group.items.map(item => (
+                      <div key={item.sku} className="px-3.5 py-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-slate-700 dark:text-slate-300">
+                              {item.variant_label || item.sku}
+                            </p>
+                            <p className="truncate font-mono text-[11px] text-slate-400 dark:text-slate-500">{item.sku}</p>
+                          </div>
+                          <span className="tnum shrink-0 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                            {channelTotal(item, channel)}
+                          </span>
+                        </div>
+                        {showAmazon && (
+                          <div className="mt-2 flex items-center justify-between">
+                            <span className="text-[11px] text-slate-400 dark:text-slate-500">Shop stock</span>
+                            <StockAdjuster sku={item.sku} value={item.shop_stock || 0} onChange={applyStock} />
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  )}
-                  {showShopifyCol && (
-                    <div className="bg-fuchsia-50 dark:bg-fuchsia-900/20 rounded-lg py-2">
-                      <p className="text-[10px] font-bold text-fuchsia-400 uppercase">Shopify</p>
-                      <p className="font-bold text-fuchsia-700 dark:text-fuchsia-400 text-sm">{item.shopify_quantity || 0}</p>
-                    </div>
-                  )}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
-          {filtered.length === 0 && (
-            <div className="py-12 text-center text-slate-400 dark:text-slate-500 text-sm">
-              {fetching ? 'Loading inventory...' : channelItems.length === 0 ? `No ${channel === 'all' ? '' : channel + ' '}products yet.` : 'No products match your search.'}
-            </div>
+          {groups.length === 0 && (
+            <p className="py-14 text-center text-sm text-slate-400 dark:text-slate-500">
+              {fetching ? 'Loading inventory…' : 'Nothing matches those filters.'}
+            </p>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-4">
+          {showAmazon && (
+            <button
+              onClick={triggerAmazonFullSync}
+              disabled={amazonLoading}
+              className="text-xs text-slate-400 transition-colors hover:text-blue-600 disabled:opacity-50 dark:hover:text-blue-400"
+              title="Re-import the SKU list, FBM quantities and variation families. Slow; runs nightly on its own."
+            >
+              Run full Amazon refresh
+            </button>
+          )}
+          {showShopify && shopifyConnected && (
+            <button onClick={disconnectShopify} className="text-xs text-slate-400 transition-colors hover:text-red-500">
+              Disconnect Shopify
+            </button>
           )}
         </div>
       </main>
     </div>
+  );
+}
+
+function GroupRows({ group, single, open, channel, showAmazon, showShopify, onToggle, onStock, onRenamed }: {
+  group: ProductGroup;
+  single: boolean;
+  open: boolean;
+  channel: Channel;
+  showAmazon: boolean;
+  showShopify: boolean;
+  onToggle: (key: string) => void;
+  onStock: (sku: string, next: number) => void;
+  onRenamed: (key: string, name: string, isOverride: boolean) => void;
+}) {
+  const only = group.items[0];
+
+  return (
+    <>
+      <tr
+        className={`transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40 ${
+          open && !single ? 'bg-slate-50/60 dark:bg-slate-800/30' : ''
+        }`}
+      >
+        <td className="px-4 py-2.5">
+          <div className="flex items-center gap-2">
+            {single ? (
+              <span className="w-4" />
+            ) : (
+              <button
+                onClick={() => onToggle(group.key)}
+                className="grid h-4 w-4 place-items-center text-slate-400 transition-transform hover:text-slate-700 dark:hover:text-slate-200"
+                aria-expanded={open}
+                aria-label={`${open ? 'Collapse' : 'Expand'} ${group.name}`}
+              >
+                <svg className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            )}
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <GroupNameEditor
+                  groupKey={group.key}
+                  name={group.name}
+                  isOverride={group.nameIsOverride}
+                  onSaved={onRenamed}
+                />
+                {!single && (
+                  <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                    {group.items.length}
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 truncate font-mono text-[11px] text-slate-400 dark:text-slate-500">
+                {single ? only.sku : (
+                  <>
+                    {group.items.length} variations
+                    {group.outCount > 0 && <span className="ml-1.5 font-sans font-semibold text-red-500">{group.outCount} out</span>}
+                    {group.lowCount > 0 && <span className="ml-1.5 font-sans font-semibold text-amber-500">{group.lowCount} low</span>}
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
+        </td>
+
+        {showAmazon && <td className="px-3 py-2.5 text-right"><Num value={group.fba} muted /></td>}
+        {showAmazon && <td className="px-3 py-2.5 text-right"><Num value={group.fbm} muted /></td>}
+        {showAmazon && (
+          <td className="px-3 py-2.5 text-center">
+            {single
+              ? <StockAdjuster sku={only.sku} value={only.shop_stock || 0} onChange={onStock} />
+              : <Num value={group.shop} muted />}
+          </td>
+        )}
+        {showShopify && <td className="px-3 py-2.5 text-right"><Num value={group.shopify} muted /></td>}
+
+        <td className="px-3 py-2.5 text-right">
+          <span className="tnum text-sm font-bold text-slate-900 dark:text-slate-100">{group.total}</span>
+        </td>
+        <td className="px-4 py-2.5"><StatusPill status={group.status} /></td>
+      </tr>
+
+      {!single && open && group.items.map(item => {
+        const total = channelTotal(item, channel);
+        return (
+          <tr key={item.sku} className="bg-slate-50/40 text-slate-600 dark:bg-slate-800/20 dark:text-slate-400">
+            <td className="py-2 pl-12 pr-4">
+              <p className="truncate text-sm font-medium text-slate-700 dark:text-slate-300">
+                {item.variant_label || <span className="text-slate-400 italic">Unlabelled</span>}
+              </p>
+              <p className="truncate font-mono text-[11px] text-slate-400 dark:text-slate-500">{item.sku}</p>
+            </td>
+            {showAmazon && <td className="px-3 py-2 text-right"><Num value={item.fba_quantity || 0} muted /></td>}
+            {showAmazon && <td className="px-3 py-2 text-right"><Num value={item.fbm_quantity || 0} muted /></td>}
+            {showAmazon && (
+              <td className="px-3 py-2 text-center">
+                <StockAdjuster sku={item.sku} value={item.shop_stock || 0} onChange={onStock} />
+              </td>
+            )}
+            {showShopify && <td className="px-3 py-2 text-right"><Num value={item.shopify_quantity || 0} muted /></td>}
+            <td className="px-3 py-2 text-right">
+              <span className={`tnum text-sm font-semibold ${
+                total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-700 dark:text-slate-300'
+              }`}>{total}</span>
+            </td>
+            <td className="px-4 py-2"><StatusPill status={statusOf(total)} /></td>
+          </tr>
+        );
+      })}
+    </>
   );
 }
