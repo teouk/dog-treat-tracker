@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getDb } from '@/lib/db';
 import { ensureSchema } from '@/lib/migrate';
+import { syncWorkbookAfterStockChange } from '@/lib/workbook/auto-sync';
 
 /**
  * PATCH /api/inventory/:sku — adjust the manually-tracked shop stock.
@@ -84,6 +85,7 @@ export async function PATCH(
       requested: delta,
       applied,
       clamped: applied !== delta,
+      workbook: await syncWorkbookAfterStockChange(`adjust ${sku}`, actor),
     });
   }
 
@@ -113,7 +115,13 @@ export async function PATCH(
       VALUES (${sku}, ${value - before}, ${before}, ${value}, ${reason ?? 'set exact'}, ${actor})
     `;
 
-    return NextResponse.json({ success: true, sku, shop_stock: value, applied: value - before });
+    return NextResponse.json({
+      success: true,
+      sku,
+      shop_stock: value,
+      applied: value - before,
+      workbook: await syncWorkbookAfterStockChange(`set ${sku}`, actor),
+    });
   }
 
   return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });

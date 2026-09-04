@@ -70,6 +70,7 @@ export default function InventoryDashboard() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [fetching, setFetching] = useState(true);
   const [amazonLoading, setAmazonLoading] = useState(false);
+  const [fullSyncLoading, setFullSyncLoading] = useState(false);
   const [shopifyLoading, setShopifyLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -120,16 +121,65 @@ export default function InventoryDashboard() {
   }
 
   /**
+   * Refresh Amazon stock levels — the everyday action behind the Amazon button.
+   *
+   * One call to /api/sync, which reads FBA quantities straight from the
+   * inventory summaries API: two requests for the current catalogue, a couple
+   * of seconds end to end.
+   *
+   * This deliberately does *not* touch listings, ASINs or variation families.
+   * Those come from a report Amazon builds on its own schedule, which is what
+   * made the old button appear to hang for minutes; they change rarely and are
+   * handled by the full refresh and the nightly cron instead.
+   */
+  async function runAmazonStockRefresh() {
+    setAmazonLoading(true);
+    setSyncStatus('Refreshing Amazon stock…');
+
+    try {
+      const res = await fetch('/api/sync');
+      const body = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          body.error === 'NO_SKUS'
+            ? 'No Amazon SKUs known yet — run a Full refresh first.'
+            : body.message || body.error || 'Sync failed'
+        );
+      }
+
+      await fetchInventory();
+      const seconds = ((body.elapsedMs || 0) / 1000).toFixed(1);
+      const bits = [`${body.updated || 0} SKUs in ${seconds}s`];
+      if (body.failedBatches) bits.push(`${body.failedBatches} batch(es) failed`);
+      flash(`Amazon stock refreshed — ${bits.join(', ')}`);
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Sync failed', 6000);
+    }
+
+    setAmazonLoading(false);
+  }
+
+  /**
    * Drive the comprehensive Amazon sync to completion.
    *
    * The server does as much as fits in one invocation and hands back a
    * token; we keep calling with it until the sync reports done. The cap is
    * a safety net against an unexpected server-side loop, not an expected
    * outcome.
+   *
+   * The first stage waits on a report Amazon queues its own side, so this can
+   * legitimately run for several minutes and the tab has to stay open. It is a
+   * secondary action for that reason — use it when listings or variations have
+   * changed, not to check stock.
    */
-  async function runAmazonSync() {
-    setAmazonLoading(true);
-    setSyncStatus('Starting comprehensive Amazon sync…');
+  async function runAmazonSync({ fresh = false }: { fresh?: boolean } = {}) {
+    setFullSyncLoading(true);
+    setSyncStatus(
+      fresh
+        ? 'Building a brand-new Amazon listings report — this can take a few minutes…'
+        : 'Starting full Amazon refresh…'
+    );
 
     try {
       let token = '';
@@ -138,7 +188,7 @@ export default function InventoryDashboard() {
       for (let step = 0; step < 40 && !done; step++) {
         const url = token
           ? `/api/sync/amazon?token=${encodeURIComponent(token)}`
-          : '/api/sync/amazon';
+          : `/api/sync/amazon${fresh ? '?fresh=1' : ''}`;
         const res = await fetch(url);
         const body = await res.json().catch(() => ({}));
 
@@ -166,7 +216,7 @@ export default function InventoryDashboard() {
       flash(e instanceof Error ? e.message : 'Sync failed', 6000);
     }
 
-    setAmazonLoading(false);
+    setFullSyncLoading(false);
   }
 
   async function triggerShopifySync() {
@@ -307,6 +357,7 @@ export default function InventoryDashboard() {
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
+            {/* Paired with the full-width bar below, which takes over under lg. */}
             {syncStatus && (
               <span className="hidden max-w-xs truncate rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 lg:inline">
                 {syncStatus}
@@ -314,17 +365,35 @@ export default function InventoryDashboard() {
             )}
 
             {showAmazon && (
-              <button
-                onClick={runAmazonSync}
-                disabled={amazonLoading}
-                className={`${syncBtn} bg-orange-600 hover:bg-orange-700`}
-                title="Comprehensive Amazon refresh: listings, FBA stock, variation families and inbound shipments"
-              >
-                {amazonLoading
-                  ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                  : <span aria-hidden>⟳</span>}
-                <span className="hidden sm:inline">Amazon</span>
-              </button>
+              <>
+                <button
+                  onClick={runAmazonStockRefresh}
+                  disabled={amazonLoading || fullSyncLoading}
+                  className={`${syncBtn} bg-orange-600 hover:bg-orange-700`}
+                  title="Refresh Amazon stock levels — takes a couple of seconds"
+                >
+                  {amazonLoading
+                    ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                    : <span aria-hidden>⟳</span>}
+                  <span className="hidden sm:inline">Amazon</span>
+                </button>
+
+                <button
+                  onClick={e => runAmazonSync({ fresh: e.shiftKey })}
+                  disabled={amazonLoading || fullSyncLoading}
+                  className={
+                    `${syncBtn} !text-slate-600 dark:!text-slate-300 ` +
+                    'border border-slate-300 bg-transparent hover:bg-slate-100 ' +
+                    'dark:border-slate-700 dark:hover:bg-slate-800'
+                  }
+                  title="Full Amazon refresh: listings, variation families and inbound shipments. Reuses a listings report from the last few hours when there is one, so it is usually quick. Shift-click to force Amazon to build a brand-new report, which takes several minutes — keep this tab open."
+                >
+                  {fullSyncLoading
+                    ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-400/30 border-t-slate-500" />
+                    : <span aria-hidden>⤓</span>}
+                  <span className="hidden md:inline">Full</span>
+                </button>
+              </>
             )}
 
             {showShopify && (shopifyConnected ? (

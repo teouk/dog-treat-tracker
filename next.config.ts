@@ -32,6 +32,10 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  // Workbook handling runs on Node, not the bundler: ExcelJS and JSZip both
+  // reach for Node built-ins and resolve their own optional dependencies at
+  // runtime, which the server bundler otherwise tries to trace and inline.
+  serverExternalPackages: ['exceljs', 'jszip'],
   async headers() {
     return [
       {

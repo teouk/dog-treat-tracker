@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
+import { syncWorkbookAfterStockChange } from '@/lib/workbook/auto-sync';
 import { getDb } from '@/lib/db';
 import { ensureSchema } from '@/lib/migrate';
 import { getShopifyToken, fetchShopifyIncoming, SHOPIFY_STORE, SHOPIFY_API_VERSION } from '@/lib/shopify';
@@ -143,6 +144,10 @@ export async function GET() {
     grouped: new Set(rows.map(r => r.productId)).size,
     incomingSkus: incoming.size,
     unitsDeducted: deduction.unitsDeducted,
+    workbook: await syncWorkbookAfterStockChange(
+      'Shopify sync',
+      session.user?.email || null,
+    ),
     syncedAt: syncTime,
   });
 }

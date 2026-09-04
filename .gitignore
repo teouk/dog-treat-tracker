@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local copy of the master workbook and its backups. Business data — SKU
+# costs, turnover, ad spend, VAT — so it stays out of git even though the
+# repo is private. See docs/workbook-sync.md for where to put the file.
+/data/*.xlsx
+/data/backups/

@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { runFastSync, NoSkusError } from '@/lib/sync';
+import { syncWorkbookAfterStockChange } from '@/lib/workbook/auto-sync';
 
 export const maxDuration = 60;
 
@@ -23,7 +24,11 @@ export async function GET(request: NextRequest) {
 
   try {
     const result = await runFastSync();
-    return NextResponse.json({ ...result, triggeredBy: isCron ? 'cron' : 'user' });
+    const workbook = await syncWorkbookAfterStockChange(
+      isCron ? 'nightly Amazon sync' : 'Amazon fast sync',
+      isCron ? 'cron' : null,
+    );
+    return NextResponse.json({ ...result, triggeredBy: isCron ? 'cron' : 'user', workbook });
   } catch (err) {
     if (err instanceof NoSkusError) {
       return NextResponse.json({ success: false, error: 'NO_SKUS', message: err.message }, { status: 400 });

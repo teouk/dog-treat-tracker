@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { gunzipSync } from 'node:zlib';
 import { auth } from '@/auth';
+import { syncWorkbookAfterStockChange } from '@/lib/workbook/auto-sync';
 import { getDb } from '@/lib/db';
 import { ensureSchema } from '@/lib/migrate';
 import {
   getAccessToken, spFetch, fetchFbaQuantities, fetchParentAsins,
-  fetchInboundShipments, UK_MARKETPLACE_ID,
+  fetchInboundShipments, findRecentReport, UK_MARKETPLACE_ID,
 } from '@/lib/amazon';
 import { deriveVariantLabel } from '@/lib/grouping';
 import { applyAmazonInbound } from '@/lib/outbound';
@@ -16,6 +17,18 @@ export const maxDuration = 60;
 const BUDGET_MS = 45_000;
 const FBA_CHUNK = 200;
 const CATALOG_CHUNK = 100;
+
+const LISTINGS_REPORT_TYPE = 'GET_MERCHANT_LISTINGS_ALL_DATA';
+
+/**
+ * How old a finished listings report may be and still be reused.
+ *
+ * Listings, ASINs and fulfilment channels change rarely; the minutes spent
+ * waiting for Amazon to build a fresh report buy almost nothing. `?fresh=1`
+ * forces a new one when a listing genuinely has just changed.
+ */
+const REPORT_MAX_AGE_MS =
+  (Number(process.env.AMAZON_REPORT_MAX_AGE_MINUTES) || 360) * 60_000;
 
 type Stage = 'report' | 'listings' | 'fba' | 'catalog' | 'inbound' | 'done';
 
@@ -92,13 +105,35 @@ export async function GET(request: NextRequest) {
     const sql = getDb();
     const token = await getAccessToken();
 
-    // --- 1. Request the listings report, then poll until Amazon builds it.
+    // --- 1. Reuse a recent listings report, or request one and wait for it.
     if (state.stage === 'report') {
       if (!state.reportId) {
+        // Amazon queues report generation, so this is where the whole sync
+        // used to sit for minutes. Check for one it has already built first.
+        const fresh = request.nextUrl.searchParams.get('fresh') === '1';
+        const recent = fresh
+          ? null
+          : await findRecentReport(token, LISTINGS_REPORT_TYPE, REPORT_MAX_AGE_MS);
+
+        if (recent) {
+          state.reportId = recent.reportId;
+          state.documentId = recent.documentId;
+          state.stage = 'listings';
+          return NextResponse.json({
+            done: false,
+            token: encode(state),
+            stage: 'listings',
+            progress: `Reusing a listings report from ${recent.ageMinutes} min ago — importing listings`,
+            reusedReport: true,
+            reportAgeMinutes: recent.ageMinutes,
+            counters: state.counters,
+          });
+        }
+
         const res = await spFetch('/reports/2021-06-30/reports', token, {
           method: 'POST',
           body: JSON.stringify({
-            reportType: 'GET_MERCHANT_LISTINGS_ALL_DATA',
+            reportType: LISTINGS_REPORT_TYPE,
             marketplaceIds: [UK_MARKETPLACE_ID],
           }),
         });
@@ -330,6 +365,10 @@ export async function GET(request: NextRequest) {
         progress: 'Comprehensive sync complete',
         counters: state.counters,
         skippedUnknownSkus: deduction.skippedUnknownSkus,
+        workbook: await syncWorkbookAfterStockChange(
+          'Amazon comprehensive sync',
+          session.user?.email || null,
+        ),
         elapsedMs: Date.now() - started,
       });
     }

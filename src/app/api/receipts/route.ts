@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getDb } from '@/lib/db';
 import { ensureSchema } from '@/lib/migrate';
+import { syncWorkbookAfterStockChange } from '@/lib/workbook/auto-sync';
 
 type ItemInput = { sku: string; quantity: number };
 
@@ -153,5 +154,6 @@ export async function POST(request: NextRequest) {
     receiptId: result[0]?.receipt_id,
     linesApplied: result[0]?.lines_applied ?? 0,
     totalUnits: result[0]?.total_units ?? 0,
+    workbook: await syncWorkbookAfterStockChange(label, actor),
   });
 }
