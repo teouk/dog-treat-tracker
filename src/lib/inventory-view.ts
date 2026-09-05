@@ -2,7 +2,6 @@ export type InventoryItem = {
   sku: string;
   product_name: string | null;
   fba_quantity: number;
-  fbm_quantity: number;
   shop_stock: number;
   shopify_quantity: number;
   /** Units already on their way to an Amazon fulfilment centre. */
@@ -29,15 +28,22 @@ export function statusOf(total: number): Status {
   return 'in';
 }
 
-/** Stock counted for a SKU under the currently selected channel. */
-export function channelTotal(item: InventoryItem, channel: Channel): number {
-  const fba = item.fba_quantity || 0;
-  const fbm = item.fbm_quantity || 0;
-  const shop = item.shop_stock || 0;
-  const shopify = item.shopify_quantity || 0;
-  if (channel === 'amazon') return fba + fbm + shop;
-  if (channel === 'shopify') return shopify;
-  return fba + fbm + shop + shopify;
+/**
+ * Stock the business actually owns for a SKU: shop floor plus what Amazon
+ * holds in its fulfilment centres.
+ *
+ * Shopify is deliberately excluded. Its quantity is a shop-front figure for
+ * units fulfilled out of the same physical shop stock, so adding it would
+ * count those units a second time. FBM was removed from the model entirely
+ * for the same reason — merchant-fulfilled Amazon orders also ship from the
+ * shop, so its quantity was never stock in its own right.
+ *
+ * The figure does not vary by channel: the channel tabs decide which products
+ * are listed, not what "in stock" means for one of them. This matches how the
+ * master workbook has always computed Toplam_Stok_Fiyatı.
+ */
+export function totalStock(item: InventoryItem): number {
+  return (item.fba_quantity || 0) + (item.shop_stock || 0);
 }
 
 export type ProductGroup = {
@@ -46,7 +52,6 @@ export type ProductGroup = {
   nameIsOverride: boolean;
   items: InventoryItem[];
   fba: number;
-  fbm: number;
   shop: number;
   shopify: number;
   total: number;
@@ -63,7 +68,7 @@ export type ProductGroup = {
  * tracked separately so a family that is healthy in aggregate still surfaces
  * the individual variant that has run out.
  */
-export function buildGroups(items: InventoryItem[], channel: Channel): ProductGroup[] {
+export function buildGroups(items: InventoryItem[]): ProductGroup[] {
   const byKey = new Map<string, InventoryItem[]>();
   for (const item of items) {
     const list = byKey.get(item.group_key);
@@ -73,19 +78,19 @@ export function buildGroups(items: InventoryItem[], channel: Channel): ProductGr
 
   const groups: ProductGroup[] = [];
   for (const [key, groupItems] of byKey) {
-    let fba = 0, fbm = 0, shop = 0, shopify = 0, lowCount = 0, outCount = 0;
+    let fba = 0, shop = 0, shopify = 0, lowCount = 0, outCount = 0;
 
     for (const item of groupItems) {
       fba += item.fba_quantity || 0;
-      fbm += item.fbm_quantity || 0;
       shop += item.shop_stock || 0;
+      // Carried for display only — never added into `total`.
       shopify += item.shopify_quantity || 0;
-      const s = statusOf(channelTotal(item, channel));
+      const s = statusOf(totalStock(item));
       if (s === 'out') outCount++;
       else if (s === 'low') lowCount++;
     }
 
-    const total = groupItems.reduce((sum, i) => sum + channelTotal(i, channel), 0);
+    const total = groupItems.reduce((sum, i) => sum + totalStock(i), 0);
     const sorted = groupItems
       .slice()
       .sort((a, b) => (a.variant_label || a.sku).localeCompare(b.variant_label || b.sku, undefined, { numeric: true }));
@@ -95,7 +100,7 @@ export function buildGroups(items: InventoryItem[], channel: Channel): ProductGr
       name: sorted[0]?.group_name || key,
       nameIsOverride: sorted[0]?.group_name_is_override ?? false,
       items: sorted,
-      fba, fbm, shop, shopify, total,
+      fba, shop, shopify, total,
       status: statusOf(total),
       lowCount,
       outCount,

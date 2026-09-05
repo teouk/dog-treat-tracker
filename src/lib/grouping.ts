@@ -145,7 +145,6 @@ export const GROUPED_INVENTORY_SQL = `
   SELECT
     r.sku, r.product_name,
     COALESCE(r.fba_quantity, 0)     AS fba_quantity,
-    COALESCE(r.fbm_quantity, 0)     AS fbm_quantity,
     COALESCE(r.shop_stock, 0)       AS shop_stock,
     COALESCE(r.shopify_quantity, 0) AS shopify_quantity,
     COALESCE(r.fba_inbound, 0)      AS fba_inbound,

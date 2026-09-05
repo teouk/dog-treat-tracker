@@ -8,7 +8,6 @@ type Raw = {
   sku: string;
   product_name: string | null;
   fba_quantity: number;
-  fbm_quantity: number;
   shop_stock: number;
   shopify_quantity: number;
   fba_inbound: number;
@@ -34,7 +33,6 @@ export async function GET() {
     sku: r.sku,
     product_name: r.product_name,
     fba_quantity: r.fba_quantity,
-    fbm_quantity: r.fbm_quantity,
     shop_stock: r.shop_stock,
     shopify_quantity: r.shopify_quantity,
     fba_inbound: r.fba_inbound,

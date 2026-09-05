@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSession, signOut } from 'next-auth/react';
 import Login from '@/components/Login';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -9,7 +9,7 @@ import BulkReceiveModal from '@/components/BulkReceiveModal';
 import Nav from '@/components/Nav';
 import {
   type InventoryItem, type Channel, type StatusFilter, type Status, type ProductGroup,
-  LOW_STOCK_THRESHOLD, statusOf, channelTotal, buildGroups,
+  LOW_STOCK_THRESHOLD, statusOf, totalStock, buildGroups,
 } from '@/lib/inventory-view';
 
 const STATUS_STYLES: Record<Status, { dot: string; text: string; label: string }> = {
@@ -80,6 +80,18 @@ export default function InventoryDashboard() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showReceive, setShowReceive] = useState(false);
   const [deductAmazon, setDeductAmazon] = useState(true);
+
+  const headerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const apply = () =>
+      document.documentElement.style.setProperty('--app-header-h', `${el.offsetHeight}px`);
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [authStatus]);
 
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
@@ -277,7 +289,7 @@ export default function InventoryDashboard() {
     return inventory;
   }, [inventory, channel]);
 
-  const allGroups = useMemo(() => buildGroups(channelItems, channel), [channelItems, channel]);
+  const allGroups = useMemo(() => buildGroups(channelItems), [channelItems]);
 
   const stats = useMemo(() => {
     let inStock = 0, low = 0, out = 0;
@@ -331,9 +343,14 @@ export default function InventoryDashboard() {
   }
   if (authStatus === 'unauthenticated') return <Login />;
 
-  const showAmazon = channel !== 'shopify';
+  // FBA and Shop are the two inputs to Total, so they show on every tab —
+  // hiding them on the Shopify tab left a Total with no visible source.
+  // The Shopify column is informational and hidden on the Amazon tab.
   const showShopify = channel !== 'amazon';
-  const colSpan = 3 + (showAmazon ? 3 : 0) + (showShopify ? 1 : 0);
+  // Controls the Amazon sync buttons only, not which columns are rendered.
+  const showAmazonSync = channel !== 'shopify';
+  // Product, FBA, Shop, Total, Status, plus Shopify when shown.
+  const colSpan = 5 + (showShopify ? 1 : 0);
 
   const channelTabs: Array<{ key: Channel; label: string }> = [
     { key: 'all', label: 'All channels' },
@@ -341,13 +358,20 @@ export default function InventoryDashboard() {
     { key: 'shopify', label: 'Shopify' },
   ];
 
+  // Pinned under the app header (which is `sticky top-0` and 57px tall
+  // including its border). Opaque backgrounds only — rows scroll underneath.
+  const stickyHead =
+    'sticky top-[var(--app-header-h,57px)] z-10 bg-slate-100 py-3 font-bold text-slate-600 ' +
+    'shadow-[0_1px_0_0_theme(colors.slate.300)] ' +
+    'dark:bg-slate-800 dark:text-slate-300 dark:shadow-[0_1px_0_0_theme(colors.slate.700)]';
+
   const syncBtn =
     'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white ' +
     'transition-colors disabled:cursor-not-allowed disabled:opacity-50';
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
+      <header ref={headerRef} className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
           <div className="flex min-w-0 items-center gap-4">
             <h1 className="truncate text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100 sm:text-base">
@@ -364,7 +388,7 @@ export default function InventoryDashboard() {
               </span>
             )}
 
-            {showAmazon && (
+            {showAmazonSync && (
               <>
                 <button
                   onClick={runAmazonStockRefresh}
@@ -507,17 +531,16 @@ export default function InventoryDashboard() {
         </div>
 
         {/* Desktop grid */}
-        <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 md:block">
+        <div className="hidden overflow-clip rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900 md:block">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400">
-                <th className="px-4 py-2.5 text-left font-semibold">Product</th>
-                {showAmazon && <th className="px-3 py-2.5 text-right font-semibold">FBA</th>}
-                {showAmazon && <th className="px-3 py-2.5 text-right font-semibold">FBM</th>}
-                {showAmazon && <th className="px-3 py-2.5 text-center font-semibold">Shop</th>}
-                {showShopify && <th className="px-3 py-2.5 text-right font-semibold">Shopify</th>}
-                <th className="px-3 py-2.5 text-right font-semibold">Total</th>
-                <th className="px-4 py-2.5 text-left font-semibold">Status</th>
+              <tr className="text-[11px] uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                <th className={`${stickyHead} px-4 text-left`}>Product</th>
+                <th className={`${stickyHead} px-3 text-right`}>FBA</th>
+                <th className={`${stickyHead} px-3 text-center`}>Shop</th>
+                {showShopify && <th className={`${stickyHead} px-3 text-right`}>Shopify</th>}
+                <th className={`${stickyHead} px-3 text-right`}>Total</th>
+                <th className={`${stickyHead} px-4 text-left`}>Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -531,7 +554,6 @@ export default function InventoryDashboard() {
                     single={single}
                     open={open}
                     channel={channel}
-                    showAmazon={showAmazon}
                     showShopify={showShopify}
                     onToggle={toggle}
                     onStock={applyStock}
@@ -578,12 +600,10 @@ export default function InventoryDashboard() {
                 </button>
 
                 {single ? (
-                  showAmazon && (
-                    <div className="flex items-center justify-between border-t border-slate-100 px-3.5 py-2.5 dark:border-slate-800">
-                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Shop stock</span>
-                      <StockAdjuster sku={group.items[0].sku} value={group.items[0].shop_stock || 0} onChange={applyStock} />
-                    </div>
-                  )
+                  <div className="flex items-center justify-between border-t border-slate-100 px-3.5 py-2.5 dark:border-slate-800">
+                    <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Shop stock</span>
+                    <StockAdjuster sku={group.items[0].sku} value={group.items[0].shop_stock || 0} onChange={applyStock} />
+                  </div>
                 ) : open && (
                   <div className="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
                     {group.items.map(item => (
@@ -596,15 +616,13 @@ export default function InventoryDashboard() {
                             <p className="truncate font-mono text-[11px] text-slate-400 dark:text-slate-500">{item.sku}</p>
                           </div>
                           <span className="tnum shrink-0 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                            {channelTotal(item, channel)}
+                            {totalStock(item)}
                           </span>
                         </div>
-                        {showAmazon && (
-                          <div className="mt-2 flex items-center justify-between">
-                            <span className="text-[11px] text-slate-400 dark:text-slate-500">Shop stock</span>
-                            <StockAdjuster sku={item.sku} value={item.shop_stock || 0} onChange={applyStock} />
-                          </div>
-                        )}
+                        <div className="mt-2 flex items-center justify-between">
+                          <span className="text-[11px] text-slate-400 dark:text-slate-500">Shop stock</span>
+                          <StockAdjuster sku={item.sku} value={item.shop_stock || 0} onChange={applyStock} />
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -654,12 +672,11 @@ export default function InventoryDashboard() {
   );
 }
 
-function GroupRows({ group, single, open, channel, showAmazon, showShopify, onToggle, onStock, onRenamed }: {
+function GroupRows({ group, single, open, showShopify, onToggle, onStock, onRenamed }: {
   group: ProductGroup;
   single: boolean;
   open: boolean;
   channel: Channel;
-  showAmazon: boolean;
   showShopify: boolean;
   onToggle: (key: string) => void;
   onStock: (sku: string, next: number) => void;
@@ -718,15 +735,12 @@ function GroupRows({ group, single, open, channel, showAmazon, showShopify, onTo
           </div>
         </td>
 
-        {showAmazon && <td className="px-3 py-2.5 text-right"><Num value={group.fba} muted /></td>}
-        {showAmazon && <td className="px-3 py-2.5 text-right"><Num value={group.fbm} muted /></td>}
-        {showAmazon && (
-          <td className="px-3 py-2.5 text-center">
-            {single
-              ? <StockAdjuster sku={only.sku} value={only.shop_stock || 0} onChange={onStock} />
-              : <Num value={group.shop} muted />}
-          </td>
-        )}
+        <td className="px-3 py-2.5 text-right"><Num value={group.fba} muted /></td>
+        <td className="px-3 py-2.5 text-center">
+          {single
+            ? <StockAdjuster sku={only.sku} value={only.shop_stock || 0} onChange={onStock} />
+            : <Num value={group.shop} muted />}
+        </td>
         {showShopify && <td className="px-3 py-2.5 text-right"><Num value={group.shopify} muted /></td>}
 
         <td className="px-3 py-2.5 text-right">
@@ -736,7 +750,7 @@ function GroupRows({ group, single, open, channel, showAmazon, showShopify, onTo
       </tr>
 
       {!single && open && group.items.map(item => {
-        const total = channelTotal(item, channel);
+        const total = totalStock(item);
         return (
           <tr key={item.sku} className="bg-slate-50/40 text-slate-600 dark:bg-slate-800/20 dark:text-slate-400">
             <td className="py-2 pl-12 pr-4">
@@ -755,13 +769,10 @@ function GroupRows({ group, single, open, channel, showAmazon, showShopify, onTo
                 )}
               </p>
             </td>
-            {showAmazon && <td className="px-3 py-2 text-right"><Num value={item.fba_quantity || 0} muted /></td>}
-            {showAmazon && <td className="px-3 py-2 text-right"><Num value={item.fbm_quantity || 0} muted /></td>}
-            {showAmazon && (
-              <td className="px-3 py-2 text-center">
-                <StockAdjuster sku={item.sku} value={item.shop_stock || 0} onChange={onStock} />
-              </td>
-            )}
+            <td className="px-3 py-2 text-right"><Num value={item.fba_quantity || 0} muted /></td>
+            <td className="px-3 py-2 text-center">
+              <StockAdjuster sku={item.sku} value={item.shop_stock || 0} onChange={onStock} />
+            </td>
             {showShopify && <td className="px-3 py-2 text-right"><Num value={item.shopify_quantity || 0} muted /></td>}
             <td className="px-3 py-2 text-right">
               <span className={`tnum text-sm font-semibold ${

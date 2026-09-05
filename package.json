@@ -11,7 +11,8 @@
     "workbook:dry-run": "tsx scripts/workbook-dry-run.ts",
     "workbook:import-depot": "tsx scripts/import-depot-from-workbook.ts",
     "workbook:import-missing": "tsx scripts/import-missing-products.ts",
-    "verify:amazon": "tsx scripts/verify-amazon-client.ts"
+    "verify:amazon": "tsx scripts/verify-amazon-client.ts",
+    "workbook:mirror": "tsx scripts/mirror-workbook-to-onedrive.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
