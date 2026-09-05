@@ -358,12 +358,17 @@ export default function InventoryDashboard() {
     { key: 'shopify', label: 'Shopify' },
   ];
 
-  // Pinned under the app header (which is `sticky top-0` and 57px tall
-  // including its border). Opaque backgrounds only — rows scroll underneath.
+  // Pinned under the app header, whose height is measured into
+  // --app-header-h above (it grows when the sync status bar appears, so a
+  // fixed offset would get overlapped). Opaque backgrounds only — rows
+  // scroll underneath this row.
   const stickyHead =
-    'sticky top-[var(--app-header-h,57px)] z-10 bg-slate-100 py-3 font-bold text-slate-600 ' +
-    'shadow-[0_1px_0_0_theme(colors.slate.300)] ' +
-    'dark:bg-slate-800 dark:text-slate-300 dark:shadow-[0_1px_0_0_theme(colors.slate.700)]';
+    'sticky top-[var(--app-header-h,57px)] z-10 py-3 font-bold ' +
+    // Amber with near-black text rather than white: light text on yellow is
+    // the classic unreadable pairing, and this row has to stay legible while
+    // it sits over scrolling content.
+    'bg-amber-300 text-amber-950 shadow-[0_1px_0_0_theme(colors.amber.500)] ' +
+    'dark:bg-amber-400 dark:text-amber-950 dark:shadow-[0_1px_0_0_theme(colors.amber.600)]';
 
   const syncBtn =
     'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-white ' +
