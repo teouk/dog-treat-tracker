@@ -545,7 +545,7 @@ export default function InventoryDashboard() {
               <tr className="text-[11px] uppercase tracking-wider text-slate-600 dark:text-slate-300">
                 <th className={`${stickyHead} px-4 text-left`}>Product</th>
                 <th className={`${stickyHead} px-3 text-right`}>FBA</th>
-                <th className={`${stickyHead} px-3 text-center`}>Shop</th>
+                <th className={`${stickyHead} px-3 text-center`}>Depo</th>
                 {showShopify && <th className={`${stickyHead} px-3 text-right`}>Shopify</th>}
                 {showEbay && <th className={`${stickyHead} px-3 text-right`}>eBay</th>}
                 <th className={`${stickyHead} px-3 text-right`}>Total</th>
