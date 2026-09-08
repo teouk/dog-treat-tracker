@@ -4,19 +4,22 @@ export type InventoryItem = {
   fba_quantity: number;
   shop_stock: number;
   shopify_quantity: number;
+  ebay_quantity: number;
   /** Units already on their way to an Amazon fulfilment centre. */
   fba_inbound: number;
   on_amazon: boolean;
   on_shopify: boolean;
+  on_ebay: boolean;
   last_sync_at: string | null;
   shopify_synced_at: string | null;
+  ebay_synced_at: string | null;
   variant_label: string | null;
   group_key: string;
   group_name: string;
   group_name_is_override: boolean;
 };
 
-export type Channel = 'all' | 'amazon' | 'shopify';
+export type Channel = 'all' | 'amazon' | 'shopify' | 'ebay';
 export type StatusFilter = 'all' | 'in' | 'low' | 'out';
 export type Status = 'in' | 'low' | 'out';
 
@@ -32,11 +35,11 @@ export function statusOf(total: number): Status {
  * Stock the business actually owns for a SKU: shop floor plus what Amazon
  * holds in its fulfilment centres.
  *
- * Shopify is deliberately excluded. Its quantity is a shop-front figure for
- * units fulfilled out of the same physical shop stock, so adding it would
- * count those units a second time. FBM was removed from the model entirely
- * for the same reason — merchant-fulfilled Amazon orders also ship from the
- * shop, so its quantity was never stock in its own right.
+ * Shopify and eBay are deliberately excluded. Both are shop-front figures
+ * for units fulfilled out of the same physical shop stock, so adding either
+ * would count those units a second time. FBM was removed from the model
+ * entirely for the same reason — merchant-fulfilled Amazon orders also ship
+ * from the shop, so its quantity was never stock in its own right.
  *
  * The figure does not vary by channel: the channel tabs decide which products
  * are listed, not what "in stock" means for one of them. This matches how the
@@ -54,6 +57,7 @@ export type ProductGroup = {
   fba: number;
   shop: number;
   shopify: number;
+  ebay: number;
   total: number;
   status: Status;
   /** Variants that are individually low or out, even when the group total looks healthy. */
@@ -78,13 +82,14 @@ export function buildGroups(items: InventoryItem[]): ProductGroup[] {
 
   const groups: ProductGroup[] = [];
   for (const [key, groupItems] of byKey) {
-    let fba = 0, shop = 0, shopify = 0, lowCount = 0, outCount = 0;
+    let fba = 0, shop = 0, shopify = 0, ebay = 0, lowCount = 0, outCount = 0;
 
     for (const item of groupItems) {
       fba += item.fba_quantity || 0;
       shop += item.shop_stock || 0;
       // Carried for display only — never added into `total`.
       shopify += item.shopify_quantity || 0;
+      ebay += item.ebay_quantity || 0;
       const s = statusOf(totalStock(item));
       if (s === 'out') outCount++;
       else if (s === 'low') lowCount++;
@@ -100,7 +105,7 @@ export function buildGroups(items: InventoryItem[]): ProductGroup[] {
       name: sorted[0]?.group_name || key,
       nameIsOverride: sorted[0]?.group_name_is_override ?? false,
       items: sorted,
-      fba, shop, shopify, total,
+      fba, shop, shopify, ebay, total,
       status: statusOf(total),
       lowCount,
       outCount,

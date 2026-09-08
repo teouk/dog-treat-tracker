@@ -286,6 +286,7 @@ export default function InventoryDashboard() {
   const channelItems = useMemo(() => {
     if (channel === 'amazon') return inventory.filter(i => i.on_amazon !== false);
     if (channel === 'shopify') return inventory.filter(i => i.on_shopify === true);
+    if (channel === 'ebay') return inventory.filter(i => i.on_ebay === true);
     return inventory;
   }, [inventory, channel]);
 
@@ -346,16 +347,18 @@ export default function InventoryDashboard() {
   // FBA and Shop are the two inputs to Total, so they show on every tab —
   // hiding them on the Shopify tab left a Total with no visible source.
   // The Shopify column is informational and hidden on the Amazon tab.
-  const showShopify = channel !== 'amazon';
+  const showShopify = channel === 'all' || channel === 'shopify';
+  const showEbay = channel === 'all' || channel === 'ebay';
   // Controls the Amazon sync buttons only, not which columns are rendered.
-  const showAmazonSync = channel !== 'shopify';
-  // Product, FBA, Shop, Total, Status, plus Shopify when shown.
-  const colSpan = 5 + (showShopify ? 1 : 0);
+  const showAmazonSync = channel === 'all' || channel === 'amazon';
+  // Product, FBA, Shop, Total, Status, plus Shopify and eBay when shown.
+  const colSpan = 5 + (showShopify ? 1 : 0) + (showEbay ? 1 : 0);
 
   const channelTabs: Array<{ key: Channel; label: string }> = [
     { key: 'all', label: 'All channels' },
     { key: 'amazon', label: 'Amazon' },
     { key: 'shopify', label: 'Shopify' },
+    { key: 'ebay', label: 'eBay' },
   ];
 
   // Pinned under the app header, whose height is measured into
@@ -544,6 +547,7 @@ export default function InventoryDashboard() {
                 <th className={`${stickyHead} px-3 text-right`}>FBA</th>
                 <th className={`${stickyHead} px-3 text-center`}>Shop</th>
                 {showShopify && <th className={`${stickyHead} px-3 text-right`}>Shopify</th>}
+                {showEbay && <th className={`${stickyHead} px-3 text-right`}>eBay</th>}
                 <th className={`${stickyHead} px-3 text-right`}>Total</th>
                 <th className={`${stickyHead} px-4 text-left`}>Status</th>
               </tr>
@@ -560,6 +564,7 @@ export default function InventoryDashboard() {
                     open={open}
                     channel={channel}
                     showShopify={showShopify}
+                    showEbay={showEbay}
                     onToggle={toggle}
                     onStock={applyStock}
                     onRenamed={applyGroupName}
@@ -579,7 +584,13 @@ export default function InventoryDashboard() {
           </table>
         </div>
 
-        {/* Mobile cards */}
+        {/*
+          Mobile: stacked cards rather than a horizontally scrollable table.
+          Side-scrolling hides FBA/Shopify/eBay behind a swipe most people
+          never try, and `overflow-x-auto` also forces overflow-y to `auto`,
+          which would make the wrapper a scroll container and break the
+          sticky header on the desktop table.
+        */}
         <div className="space-y-2.5 md:hidden">
           {groups.map(group => {
             const open = openKeys.has(group.key);
@@ -604,29 +615,56 @@ export default function InventoryDashboard() {
                   </div>
                 </button>
 
+                <MetricStrip
+                  fba={group.fba}
+                  shop={group.shop}
+                  shopify={group.shopify}
+                  ebay={group.ebay}
+                  showShopify={showShopify}
+                  showEbay={showEbay}
+                />
+
                 {single ? (
-                  <div className="flex items-center justify-between border-t border-slate-100 px-3.5 py-2.5 dark:border-slate-800">
-                    <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Shop stock</span>
-                    <StockAdjuster sku={group.items[0].sku} value={group.items[0].shop_stock || 0} onChange={applyStock} />
+                  <div className="border-t border-slate-100 px-3.5 py-2.5 dark:border-slate-800">
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                      Set shop stock
+                    </p>
+                    <StockAdjuster block sku={group.items[0].sku} value={group.items[0].shop_stock || 0} onChange={applyStock} />
                   </div>
                 ) : open && (
                   <div className="divide-y divide-slate-100 border-t border-slate-100 dark:divide-slate-800 dark:border-slate-800">
                     {group.items.map(item => (
-                      <div key={item.sku} className="px-3.5 py-2.5">
-                        <div className="flex items-center justify-between gap-2">
+                      <div key={item.sku} className="px-3.5 py-3">
+                        <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
                             <p className="truncate text-sm font-medium text-slate-700 dark:text-slate-300">
                               {item.variant_label || item.sku}
                             </p>
                             <p className="truncate font-mono text-[11px] text-slate-400 dark:text-slate-500">{item.sku}</p>
                           </div>
-                          <span className="tnum shrink-0 text-sm font-semibold text-slate-900 dark:text-slate-100">
-                            {totalStock(item)}
-                          </span>
+                          <div className="shrink-0 text-right">
+                            <p className="tnum text-sm font-bold text-slate-900 dark:text-slate-100">
+                              {totalStock(item)}
+                            </p>
+                            <StatusPill status={statusOf(totalStock(item))} />
+                          </div>
                         </div>
-                        <div className="mt-2 flex items-center justify-between">
-                          <span className="text-[11px] text-slate-400 dark:text-slate-500">Shop stock</span>
-                          <StockAdjuster sku={item.sku} value={item.shop_stock || 0} onChange={applyStock} />
+
+                        <MetricStrip
+                          bare
+                          fba={item.fba_quantity || 0}
+                          shop={item.shop_stock || 0}
+                          shopify={item.shopify_quantity || 0}
+                          ebay={item.ebay_quantity || 0}
+                          showShopify={showShopify}
+                          showEbay={showEbay}
+                        />
+
+                        <div className="mt-2.5">
+                          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                            Set shop stock
+                          </p>
+                          <StockAdjuster block sku={item.sku} value={item.shop_stock || 0} onChange={applyStock} />
                         </div>
                       </div>
                     ))}
@@ -677,12 +715,67 @@ export default function InventoryDashboard() {
   );
 }
 
-function GroupRows({ group, single, open, showShopify, onToggle, onStock, onRenamed }: {
+/**
+ * The per-channel stock figures, laid out for a narrow screen.
+ *
+ * On mobile these numbers previously had nowhere to live — the desktop table
+ * is hidden below `md`, so FBA, Shopify and eBay were only reachable by
+ * rotating the phone. Each figure gets its own labelled cell here, sized to
+ * stay on one line in iPhone portrait even with four channels shown.
+ */
+function MetricStrip({ fba, shop, shopify, ebay, showShopify, showEbay, bare = false }: {
+  fba: number;
+  shop: number;
+  shopify: number;
+  ebay: number;
+  showShopify: boolean;
+  showEbay: boolean;
+  /** Inside a variant row, where the card already provides its own border. */
+  bare?: boolean;
+}) {
+  const cells: Array<{ label: string; value: number; strong?: boolean }> = [
+    { label: 'FBA', value: fba },
+    { label: 'Shop', value: shop, strong: true },
+  ];
+  if (showShopify) cells.push({ label: 'Shopify', value: shopify });
+  if (showEbay) cells.push({ label: 'eBay', value: ebay });
+
+  return (
+    <div
+      className={
+        bare
+          ? 'mt-2.5 grid gap-1 rounded-lg bg-slate-50 p-1.5 dark:bg-slate-800/50'
+          : 'grid gap-1 border-t border-slate-100 bg-slate-50/60 p-2 dark:border-slate-800 dark:bg-slate-800/30'
+      }
+      style={{ gridTemplateColumns: `repeat(${cells.length}, minmax(0, 1fr))` }}
+    >
+      {cells.map(cell => (
+        <div key={cell.label} className="min-w-0 text-center">
+          <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+            {cell.label}
+          </p>
+          <p className={`tnum truncate text-sm font-bold ${
+            cell.value === 0
+              ? 'text-slate-300 dark:text-slate-600'
+              : cell.strong
+                ? 'text-slate-900 dark:text-slate-100'
+                : 'text-slate-600 dark:text-slate-300'
+          }`}>
+            {cell.value}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GroupRows({ group, single, open, showShopify, showEbay, onToggle, onStock, onRenamed }: {
   group: ProductGroup;
   single: boolean;
   open: boolean;
   channel: Channel;
   showShopify: boolean;
+  showEbay: boolean;
   onToggle: (key: string) => void;
   onStock: (sku: string, next: number) => void;
   onRenamed: (key: string, name: string, isOverride: boolean) => void;
@@ -747,6 +840,7 @@ function GroupRows({ group, single, open, showShopify, onToggle, onStock, onRena
             : <Num value={group.shop} muted />}
         </td>
         {showShopify && <td className="px-3 py-2.5 text-right"><Num value={group.shopify} muted /></td>}
+        {showEbay && <td className="px-3 py-2.5 text-right"><Num value={group.ebay} muted /></td>}
 
         <td className="px-3 py-2.5 text-right">
           <span className="tnum text-sm font-bold text-slate-900 dark:text-slate-100">{group.total}</span>
@@ -779,6 +873,7 @@ function GroupRows({ group, single, open, showShopify, onToggle, onStock, onRena
               <StockAdjuster sku={item.sku} value={item.shop_stock || 0} onChange={onStock} />
             </td>
             {showShopify && <td className="px-3 py-2 text-right"><Num value={item.shopify_quantity || 0} muted /></td>}
+            {showEbay && <td className="px-3 py-2 text-right"><Num value={item.ebay_quantity || 0} muted /></td>}
             <td className="px-3 py-2 text-right">
               <span className={`tnum text-sm font-semibold ${
                 total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-700 dark:text-slate-300'

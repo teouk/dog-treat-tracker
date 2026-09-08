@@ -41,6 +41,14 @@ export async function ensureSchema(): Promise<void> {
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS shopify_synced_at TIMESTAMPTZ`;
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS fulfillment_channel TEXT`;
 
+  // --- eBay channel ---
+  // Mirrors the Shopify columns. Like Shopify, an eBay quantity is a
+  // shop-front figure for stock fulfilled out of the same physical shop
+  // stock, so it is displayed but never added into a stock total.
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS ebay_quantity INTEGER DEFAULT 0`;
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS on_ebay BOOLEAN DEFAULT FALSE`;
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS ebay_synced_at TIMESTAMPTZ`;
+
   // --- variant grouping ---
   // asin/parent_asin come from Amazon; parent_asin is the variation family.
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS asin TEXT`;

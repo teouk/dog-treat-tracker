@@ -10,11 +10,14 @@ type Raw = {
   fba_quantity: number;
   shop_stock: number;
   shopify_quantity: number;
+  ebay_quantity: number;
   fba_inbound: number;
   on_amazon: boolean;
   on_shopify: boolean;
+  on_ebay: boolean;
   last_sync_at: string | null;
   shopify_synced_at: string | null;
+  ebay_synced_at: string | null;
   variant_label: string | null;
   group_key: string;
   derived_name: string | null;
@@ -35,11 +38,14 @@ export async function GET() {
     fba_quantity: r.fba_quantity,
     shop_stock: r.shop_stock,
     shopify_quantity: r.shopify_quantity,
+    ebay_quantity: r.ebay_quantity,
     fba_inbound: r.fba_inbound,
     on_amazon: r.on_amazon,
     on_shopify: r.on_shopify,
+    on_ebay: r.on_ebay,
     last_sync_at: r.last_sync_at,
     shopify_synced_at: r.shopify_synced_at,
+    ebay_synced_at: r.ebay_synced_at,
     variant_label: r.variant_label || deriveVariantLabel(r.product_name, r.sku),
     group_key: r.group_key,
     // A user-set display_name is used verbatim; only derived names are cleaned up.

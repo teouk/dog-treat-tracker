@@ -147,10 +147,12 @@ export const GROUPED_INVENTORY_SQL = `
     COALESCE(r.fba_quantity, 0)     AS fba_quantity,
     COALESCE(r.shop_stock, 0)       AS shop_stock,
     COALESCE(r.shopify_quantity, 0) AS shopify_quantity,
+    COALESCE(r.ebay_quantity, 0)    AS ebay_quantity,
     COALESCE(r.fba_inbound, 0)      AS fba_inbound,
     COALESCE(r.on_amazon, FALSE)    AS on_amazon,
     COALESCE(r.on_shopify, FALSE)   AS on_shopify,
-    r.last_sync_at, r.shopify_synced_at, r.variant_label,
+    COALESCE(r.on_ebay, FALSE)      AS on_ebay,
+    r.last_sync_at, r.shopify_synced_at, r.ebay_synced_at, r.variant_label,
     r.group_key,
     n.derived_name,
     g.display_name
