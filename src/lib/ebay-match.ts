@@ -35,14 +35,20 @@ export function tokenize(text: string): string[] {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .split(' ')
-    .filter(t => t.length > 1);
+    .filter(Boolean);
 }
 
 /**
  * Words that appear on nearly every listing and so carry no signal. Left in,
  * they make every product look ~40% similar to every other one.
+ *
+ * Single characters are filtered here rather than by length in `tokenize`,
+ * because size codes are single letters: dropping every one-character token
+ * threw away the S/M/L that distinguishes "S-YakCheese" from "M-YakCheese"
+ * when both carry the same product name.
  */
 const STOP_WORDS = new Set([
+  'a', 'i', 'o', 'e', 'n', 'g',
   'dog', 'dogs', 'chew', 'chews', 'treat', 'treats', 'natural', 'gls',
   'for', 'and', 'the', 'with', 'free', 'grain', 'long', 'lasting', 'dental',
   'puppy', 'air', 'dried', 'high', 'protein', 'rawhide', 'sticks', 'stick',

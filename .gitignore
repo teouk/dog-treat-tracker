@@ -45,3 +45,6 @@ next-env.d.ts
 # repo is private. See docs/workbook-sync.md for where to put the file.
 /data/*.xlsx
 /data/backups/
+
+# generated relabelling worksheet — stock levels and product data
+/ebay-relabel.md

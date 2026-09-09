@@ -37,7 +37,15 @@ async function main() {
   console.log('-- tokenizer --');
   check('splits camelCase', tokenize('YakCheeseSticks').includes('yak'), tokenize('YakCheeseSticks').join(','));
   check('keeps counts', tokenize('M-YakCheese-3ct').includes('3ct'), tokenize('M-YakCheese-3ct').join(','));
-  check('drops single chars', !tokenize('a b cow').includes('a'));
+  // tokenize keeps single characters now; noise ones are dropped a layer
+  // later by the stop-word filter, which is what similarity actually uses.
+  check('noise single chars do not affect similarity',
+    similarity('a cow ear', 'cow ear') === 1,
+    String(similarity('a cow ear', 'cow ear')));
+  check('KEEPS size letters', tokenize('M-YakCheese-3ct').includes('m'), tokenize('M-YakCheese-3ct').join(','));
+  check('S and M are distinguishable',
+    similarity('M-YakCheese-3ct', 'M-YakCheese-FBM') > similarity('M-YakCheese-3ct', 'S-YakCheese-FBM'),
+    `M/M=${similarity('M-YakCheese-3ct','M-YakCheese-FBM').toFixed(2)} M/S=${similarity('M-YakCheese-3ct','S-YakCheese-FBM').toFixed(2)}`);
 
   console.log('\n-- similarity --');
   check('identical strings score 1', similarity('beef cheek roll', 'beef cheek roll') === 1);
