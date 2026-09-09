@@ -24,6 +24,34 @@ callback URL is the most common cause of `invalid_request` here, so
 eBay also refuses `localhost` and requires HTTPS for the accepted URL, so the
 callback points at the deployed Vercel domain even during local development.
 
+## Production keysets are disabled until this endpoint exists
+
+eBay disables every production keyset until the Marketplace Account Deletion /
+Closure notification process is satisfied, so `/api/ebay/deletion` is a gate on
+the integration rather than an optional extra.
+
+Validation is a handshake: eBay GETs the endpoint with a one-off
+`challenge_code` and expects the SHA-256 of
+`challengeCode + verificationToken + endpoint`, hex encoded, in that order. The
+endpoint string must match what is registered character for character — a
+trailing slash is enough to produce a valid-looking hash that eBay rejects
+without explaining why. `EBAY_DELETION_ENDPOINT` is therefore the single source
+of truth rather than deriving it from the request.
+
+The route is deliberately unauthenticated, because eBay calls it with none of
+our credentials. That is safe because the POST handler takes no action: this
+app stores the seller's own catalogue — SKUs, quantities, listing IDs — and no
+personal data belonging to eBay users, so a deletion request has nothing to
+erase. It is acknowledged and logged for auditability.
+
+For the same reason the `x-ebay-signature` header is recorded but not
+cryptographically verified — a spoofed notification could not cause anything to
+be deleted. If this app ever stores eBay user data, that verification must be
+added before acting on a notification.
+
+Three places must hold the identical verification token: the eBay portal, the
+Vercel environment, and `.env.local`.
+
 ## Environment
 
 | Variable | Notes |
@@ -33,6 +61,8 @@ callback points at the deployed Vercel domain even during local development.
 | `EBAY_DEV_ID` | Dev ID |
 | `EBAY_REDIRECT_URI` | the **RuName**, not a URL |
 | `EBAY_ENVIRONMENT` | `sandbox` or `production` |
+| `EBAY_VERIFICATION_TOKEN` | 32-80 chars; must match the eBay portal exactly |
+| `EBAY_DELETION_ENDPOINT` | the registered deletion URL, hashed during validation |
 
 Sandbox and production have entirely separate keysets and RuNames, and the
 sandbox contains none of the seller's real listings — a sandbox sync
