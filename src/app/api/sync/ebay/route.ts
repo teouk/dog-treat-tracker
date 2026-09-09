@@ -51,9 +51,13 @@ export async function GET() {
       variantLabel: r.variant_label,
     }));
 
-    // One eBay SKU can appear on several listings; sum rather than letting the
-    // last one win, which would silently under-report stock.
+    // One SKU genuinely can appear on several listings, and eBay treats each
+    // as an independent stock pool it will sell from — so the sum is what eBay
+    // is prepared to ship. That is also an overselling exposure when the same
+    // physical stock is listed twice, so the listings behind each SKU are
+    // tracked and reported rather than quietly added up.
     const quantities = new Map<string, number>();
+    const listingsPerSku = new Map<string, Array<{ itemId: string; quantity: number }>>();
     const unmatched: Array<{
       itemId: string;
       title: string;
@@ -68,6 +72,10 @@ export async function GET() {
       const dbSku = listing.sku ? index.get(listing.sku.trim().toUpperCase()) : undefined;
       if (dbSku) {
         quantities.set(dbSku, (quantities.get(dbSku) || 0) + listing.quantityAvailable);
+        const seen = listingsPerSku.get(dbSku);
+        const entry = { itemId: listing.itemId, quantity: listing.quantityAvailable };
+        if (seen) seen.push(entry);
+        else listingsPerSku.set(dbSku, [entry]);
         continue;
       }
       const suggestion = suggestMatch(listing, candidates);
@@ -89,7 +97,10 @@ export async function GET() {
       const slice = entries.slice(i, i + BATCH);
       await Promise.all(slice.map(([sku, qty]) => sql`
         UPDATE inventory
-        SET ebay_quantity = ${qty}, on_ebay = TRUE, ebay_synced_at = ${syncedAt}
+        SET ebay_quantity      = ${qty},
+            on_ebay            = TRUE,
+            ebay_synced_at     = ${syncedAt},
+            ebay_listing_count = ${listingsPerSku.get(sku)?.length ?? 1}
         WHERE sku = ${sku}
       `));
     }
@@ -100,18 +111,35 @@ export async function GET() {
     let cleared = 0;
     if (matchedSkus.length > 0) {
       const result = await sql`
-        UPDATE inventory SET ebay_quantity = 0, ebay_synced_at = ${syncedAt}
+        UPDATE inventory
+        SET ebay_quantity = 0, ebay_listing_count = 0, ebay_synced_at = ${syncedAt}
         WHERE on_ebay = TRUE AND sku <> ALL(${matchedSkus}) AND ebay_quantity <> 0
         RETURNING sku
       ` as Array<{ sku: string }>;
       cleared = result.length;
     }
 
+    // Reported so a drifted pair like [5, 49] cannot pass as a normal 54.
+    const duplicates = [...listingsPerSku.entries()]
+      .filter(([, rows]) => rows.length > 1)
+      .map(([sku, rows]) => ({
+        sku,
+        listingCount: rows.length,
+        quantities: rows.map(r => r.quantity),
+        itemIds: rows.map(r => r.itemId),
+        total: rows.reduce((sum, r) => sum + r.quantity, 0),
+        /** Equal quantities suggest a mirrored listing; unequal means drift. */
+        quantitiesAgree: rows.every(r => r.quantity === rows[0].quantity),
+      }))
+      .sort((a, b) => b.total - a.total);
+
     return NextResponse.json({
       success: true,
       environment: EBAY_ENVIRONMENT,
       listingsReturned: listings.length,
       matched: entries.length,
+      duplicateCount: duplicates.length,
+      duplicates,
       unmatchedCount: unmatched.length,
       clearedStale: cleared,
       // Capped: this is a review aid, not a data export.

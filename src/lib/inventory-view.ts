@@ -5,6 +5,8 @@ export type InventoryItem = {
   shop_stock: number;
   shopify_quantity: number;
   ebay_quantity: number;
+  /** Number of eBay listings carrying this SKU; above 1 the quantity is a sum. */
+  ebay_listing_count: number;
   /** Units already on their way to an Amazon fulfilment centre. */
   fba_inbound: number;
   on_amazon: boolean;
@@ -58,6 +60,8 @@ export type ProductGroup = {
   shop: number;
   shopify: number;
   ebay: number;
+  /** Variants in this group whose eBay stock spans more than one listing. */
+  ebayDuplicates: number;
   total: number;
   status: Status;
   /** Variants that are individually low or out, even when the group total looks healthy. */
@@ -82,7 +86,7 @@ export function buildGroups(items: InventoryItem[]): ProductGroup[] {
 
   const groups: ProductGroup[] = [];
   for (const [key, groupItems] of byKey) {
-    let fba = 0, shop = 0, shopify = 0, ebay = 0, lowCount = 0, outCount = 0;
+    let fba = 0, shop = 0, shopify = 0, ebay = 0, ebayDuplicates = 0, lowCount = 0, outCount = 0;
 
     for (const item of groupItems) {
       fba += item.fba_quantity || 0;
@@ -90,6 +94,7 @@ export function buildGroups(items: InventoryItem[]): ProductGroup[] {
       // Carried for display only — never added into `total`.
       shopify += item.shopify_quantity || 0;
       ebay += item.ebay_quantity || 0;
+      if ((item.ebay_listing_count || 0) > 1) ebayDuplicates++;
       const s = statusOf(totalStock(item));
       if (s === 'out') outCount++;
       else if (s === 'low') lowCount++;
@@ -105,7 +110,7 @@ export function buildGroups(items: InventoryItem[]): ProductGroup[] {
       name: sorted[0]?.group_name || key,
       nameIsOverride: sorted[0]?.group_name_is_override ?? false,
       items: sorted,
-      fba, shop, shopify, ebay, total,
+      fba, shop, shopify, ebay, ebayDuplicates, total,
       status: statusOf(total),
       lowCount,
       outCount,

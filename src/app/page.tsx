@@ -262,8 +262,17 @@ export default function InventoryDashboard() {
 
       const bits = [`${body.matched || 0} matched`];
       if (body.unmatchedCount) bits.push(`${body.unmatchedCount} unmatched`);
+      if (body.duplicateCount) bits.push(`${body.duplicateCount} on multiple listings`);
       if (body.clearedStale) bits.push(`${body.clearedStale} cleared`);
-      flash(`eBay: ${bits.join(', ')} of ${body.listingsReturned || 0} listings`, 8000);
+      flash(`eBay: ${bits.join(', ')} of ${body.listingsReturned || 0} listings`, 9000);
+
+      if (body.duplicates?.length) {
+        console.warn(
+          `[ebay] ${body.duplicates.length} SKU(s) are listed more than once. eBay sells ` +
+          'from each listing independently, so these quantities are sums and may oversell:'
+        );
+        console.table(body.duplicates);
+      }
 
       // The unmatched list is the working document for relabelling listings in
       // eBay, and is far too long to read in a toast.
@@ -797,6 +806,28 @@ export default function InventoryDashboard() {
  * rotating the phone. Each figure gets its own labelled cell here, sized to
  * stay on one line in iPhone portrait even with four channels shown.
  */
+/**
+ * An eBay quantity, marked when it is a sum across more than one listing.
+ *
+ * eBay treats each listing as an independent stock pool and will sell from
+ * all of them, so two listings of 40 mean it is prepared to ship 80 of stock
+ * that may only exist once. The number stays truthful about that exposure;
+ * the marker stops it reading as a single healthy figure.
+ */
+function EbayQty({ value, listings }: { value: number; listings: number }) {
+  if (listings <= 1) return <Num value={value} muted />;
+  return (
+    <span
+      className="inline-flex items-center gap-1"
+      title={`Across ${listings} separate eBay listings. eBay can sell from each independently, so it may oversell.`}
+    >
+      <span className="tnum text-sm font-semibold text-amber-600 dark:text-amber-400">{value}</span>
+      <span aria-hidden className="text-[11px] text-amber-500">⚠</span>
+      <span className="sr-only">on {listings} eBay listings</span>
+    </span>
+  );
+}
+
 function MetricStrip({ fba, shop, shopify, ebay, showShopify, showEbay, bare = false }: {
   fba: number;
   shop: number;
@@ -914,7 +945,11 @@ function GroupRows({ group, single, open, showShopify, showEbay, onToggle, onSto
             : <Num value={group.shop} muted />}
         </td>
         {showShopify && <td className="px-3 py-2.5 text-right"><Num value={group.shopify} muted /></td>}
-        {showEbay && <td className="px-3 py-2.5 text-right"><Num value={group.ebay} muted /></td>}
+        {showEbay && (
+          <td className="px-3 py-2.5 text-right">
+            <EbayQty value={group.ebay} listings={group.ebayDuplicates > 0 ? 2 : 1} />
+          </td>
+        )}
 
         <td className="px-3 py-2.5 text-right">
           <span className="tnum text-sm font-bold text-slate-900 dark:text-slate-100">{group.total}</span>
@@ -947,7 +982,11 @@ function GroupRows({ group, single, open, showShopify, showEbay, onToggle, onSto
               <StockAdjuster sku={item.sku} value={item.shop_stock || 0} onChange={onStock} />
             </td>
             {showShopify && <td className="px-3 py-2 text-right"><Num value={item.shopify_quantity || 0} muted /></td>}
-            {showEbay && <td className="px-3 py-2 text-right"><Num value={item.ebay_quantity || 0} muted /></td>}
+            {showEbay && (
+              <td className="px-3 py-2 text-right">
+                <EbayQty value={item.ebay_quantity || 0} listings={item.ebay_listing_count || 0} />
+              </td>
+            )}
             <td className="px-3 py-2 text-right">
               <span className={`tnum text-sm font-semibold ${
                 total === 0 ? 'text-red-500' : total <= LOW_STOCK_THRESHOLD ? 'text-amber-500' : 'text-slate-700 dark:text-slate-300'

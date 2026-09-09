@@ -48,6 +48,10 @@ export async function ensureSchema(): Promise<void> {
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS ebay_quantity INTEGER DEFAULT 0`;
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS on_ebay BOOLEAN DEFAULT FALSE`;
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS ebay_synced_at TIMESTAMPTZ`;
+  // How many separate eBay listings carry this SKU. Above one, the quantity
+  // is a sum across listings that eBay treats as independent stock pools, so
+  // it can sell all of them — an overselling exposure worth showing.
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS ebay_listing_count INTEGER DEFAULT 0`;
 
   // --- variant grouping ---
   // asin/parent_asin come from Amazon; parent_asin is the variation family.

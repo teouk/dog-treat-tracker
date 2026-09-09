@@ -11,6 +11,7 @@ type Raw = {
   shop_stock: number;
   shopify_quantity: number;
   ebay_quantity: number;
+  ebay_listing_count: number;
   fba_inbound: number;
   on_amazon: boolean;
   on_shopify: boolean;
@@ -39,6 +40,7 @@ export async function GET() {
     shop_stock: r.shop_stock,
     shopify_quantity: r.shopify_quantity,
     ebay_quantity: r.ebay_quantity,
+    ebay_listing_count: r.ebay_listing_count,
     fba_inbound: r.fba_inbound,
     on_amazon: r.on_amazon,
     on_shopify: r.on_shopify,

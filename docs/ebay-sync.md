@@ -99,6 +99,26 @@ Variation listings are flattened so each variation is its own row, because a
 variation carries its own SKU and quantity while the parent reports only their
 sum.
 
+## One SKU on several listings
+
+A SKU can legitimately appear on more than one active listing, and eBay treats
+each as an independent stock pool it will sell from — two listings of 40 mean
+eBay is prepared to ship 80. The quantity is therefore summed, because that is
+what eBay will actually sell.
+
+When the same physical stock is listed twice, that sum is an overselling
+exposure rather than real availability, so `ebay_listing_count` records how
+many listings a SKU came from and the column marks anything above one. The
+sync also returns a `duplicates` report with the per-listing quantities and
+whether they agree: equal quantities suggest a mirrored listing, unequal ones
+mean the two have drifted and at least one is wrong.
+
+Seen on 2026-09-09: 10 of 45 matched SKUs were on two listings each, six of
+them with quantities that had drifted apart — one pair read 5 and 49. The
+underlying fix is to consolidate the duplicate listings in eBay; until then
+the app shows the true exposure rather than hiding it behind the smaller
+number.
+
 ## Endpoints
 
 ```
