@@ -21,6 +21,7 @@ type Raw = {
   ebay_synced_at: string | null;
   variant_label: string | null;
   group_key: string;
+  shop_name: string | null;
   derived_name: string | null;
   display_name: string | null;
 };
@@ -50,10 +51,16 @@ export async function GET() {
     ebay_synced_at: r.ebay_synced_at,
     variant_label: r.variant_label || deriveVariantLabel(r.product_name, r.sku),
     group_key: r.group_key,
-    // A user-set display_name is used verbatim; only derived names are cleaned up.
+    // A user-set display_name is used verbatim, and so is the shop's own
+    // name. `prettifyName` exists to tame Amazon and Shopify marketing titles,
+    // and it cuts at " - " — which is precisely where the shop's names carry
+    // their meaning: "COW TAIL 15 CM - STICK" and "- JUMBO" are different
+    // products, and prettifying collapsed both to "COW TAIL 15 CM".
     group_name: r.display_name?.trim()
       ? r.display_name.trim()
-      : prettifyName(r.derived_name, r.sku),
+      : r.group_key.startsWith('shop:')
+        ? (r.derived_name?.trim() || r.sku)
+        : prettifyName(r.derived_name, r.sku),
     group_name_is_override: !!r.display_name?.trim(),
   }));
 

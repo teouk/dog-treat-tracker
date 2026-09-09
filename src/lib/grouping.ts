@@ -126,10 +126,18 @@ export const GROUPED_INVENTORY_SQL = `
       i.*,
       COALESCE(
         i.group_override,
-        CASE WHEN i.shopify_product_id IS NOT NULL AND i.shopify_product_id <> ''
-             THEN 'shopify:' || i.shopify_product_id END,
+        -- The shop's own catalogue decides what counts as one product.
+        -- Channel structures disagree with it and cannot be trusted for this:
+        -- Shopify bundles separate products into a single listing, and Amazon
+        -- files THIN, REGULAR, THICK and BRAIDED bully sticks under one
+        -- variation family. Both were previously ahead of the shop's naming,
+        -- which is why unrelated SKUs appeared as variants of each other.
+        CASE WHEN i.shop_name IS NOT NULL AND btrim(i.shop_name) <> ''
+             THEN 'shop:' || upper(btrim(i.shop_name)) END,
         CASE WHEN i.parent_asin IS NOT NULL AND i.parent_asin <> ''
              THEN 'amazon:' || i.parent_asin END,
+        CASE WHEN i.shopify_product_id IS NOT NULL AND i.shopify_product_id <> ''
+             THEN 'shopify:' || i.shopify_product_id END,
         'sku:' || i.sku
       ) AS group_key
     FROM inventory i
@@ -137,8 +145,15 @@ export const GROUPED_INVENTORY_SQL = `
   names AS (
     SELECT
       group_key,
-      (array_agg(product_name ORDER BY on_shopify DESC, length(product_name) ASC)
-         FILTER (WHERE product_name IS NOT NULL AND product_name <> ''))[1] AS derived_name
+      COALESCE(
+        -- The shop's own name, whenever it has one.
+        (array_agg(shop_name) FILTER (WHERE shop_name IS NOT NULL AND btrim(shop_name) <> ''))[1],
+        -- Otherwise an Amazon title, which at least describes the product.
+        -- This used to prefer Shopify, which is where names like "Beef Tail
+        -- Sticks Chews" came from in place of "COW TAIL 15 CM - STICK".
+        (array_agg(product_name ORDER BY on_amazon DESC, length(product_name) ASC)
+           FILTER (WHERE product_name IS NOT NULL AND product_name <> ''))[1]
+      ) AS derived_name
     FROM resolved
     GROUP BY group_key
   )
@@ -153,8 +168,11 @@ export const GROUPED_INVENTORY_SQL = `
     COALESCE(r.on_amazon, FALSE)    AS on_amazon,
     COALESCE(r.on_shopify, FALSE)   AS on_shopify,
     COALESCE(r.on_ebay, FALSE)      AS on_ebay,
-    r.last_sync_at, r.shopify_synced_at, r.ebay_synced_at, r.variant_label,
+    r.last_sync_at, r.shopify_synced_at, r.ebay_synced_at,
+    -- The shop's bag size wins over a channel's variant title.
+    COALESCE(NULLIF(btrim(r.shop_variant), ''), r.variant_label) AS variant_label,
     r.group_key,
+    r.shop_name,
     n.derived_name,
     g.display_name
   FROM resolved r

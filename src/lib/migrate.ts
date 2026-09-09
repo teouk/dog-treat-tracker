@@ -53,6 +53,14 @@ export async function ensureSchema(): Promise<void> {
   // it can sell all of them — an overselling exposure worth showing.
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS ebay_listing_count INTEGER DEFAULT 0`;
 
+  // --- the shop's own catalogue ---
+  // Names and variants as the business records them, imported from the master
+  // workbook. Held separately from `product_name` so a channel sync can never
+  // overwrite them: Amazon and Shopify both write `product_name`, and their
+  // titles are marketing copy that disagrees with the shop's own naming.
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS shop_name TEXT`;
+  await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS shop_variant TEXT`;
+
   // --- variant grouping ---
   // asin/parent_asin come from Amazon; parent_asin is the variation family.
   await sql`ALTER TABLE inventory ADD COLUMN IF NOT EXISTS asin TEXT`;

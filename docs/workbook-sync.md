@@ -221,6 +221,40 @@ rows are simply never touched by the sync, so the sheet keeps its own figures
 for them. Adding the products to the app is what would bring them under
 management.
 
+## The shop's catalogue is the source of truth for names
+
+```bash
+npm run workbook:import-catalogue            # report only
+npm run workbook:import-catalogue -- --apply # write to the database
+```
+
+Copies the workbook's `Products` and `Bag` columns into `shop_name` and
+`shop_variant`, and those decide both what a product is called and which SKUs
+belong together.
+
+They are stored apart from `product_name` and `variant_label` deliberately:
+the Amazon and Shopify syncs both write `product_name` on every run, so a
+name imported into that column would survive only until the next sync.
+
+Before this, the grouping key preferred `shopify_product_id` and the display
+name was chosen with `ORDER BY on_shopify DESC`, so both came from Shopify.
+Channel structures do not agree with the shop's catalogue — Shopify bundles
+separate products into one listing with variants, and Amazon files THIN,
+REGULAR, THICK and BRAIDED bully sticks under a single variation family. The
+result was distinct products shown as variants of one another: on 2026-09-09,
+16 of 39 multi-SKU groups mixed products the shop considers separate, and
+"COW TAIL 15 CM - STICK", "COW TAIL 30 CM - STICK" and "COW TAIL 15 CM -
+JUMBO" all appeared under one heading called "Beef Tail Sticks Chews".
+
+Shop names are also shown verbatim rather than passed through `prettifyName`.
+That function tames Amazon marketing titles by cutting at " - ", which is
+exactly where the shop's names carry their meaning: prettifying collapsed both
+"COW TAIL 15 CM - STICK" and "COW TAIL 15 CM - JUMBO" to "COW TAIL 15 CM".
+
+The precedence is now shop name, then Amazon, then Shopify, then the bare SKU.
+SKUs with no workbook row — 65 of them, mostly Amazon-only listings — keep
+their channel naming and group as before.
+
 ## Storage seam
 
 Everything above `WorkbookStore` deals in bytes and knows nothing about where

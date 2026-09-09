@@ -14,7 +14,8 @@
     "verify:amazon": "tsx scripts/verify-amazon-client.ts",
     "workbook:mirror": "tsx scripts/mirror-workbook-to-onedrive.ts",
     "verify:ebay": "tsx scripts/verify-ebay-match.ts",
-    "ebay:relabel": "tsx scripts/ebay-relabel-report.ts"
+    "ebay:relabel": "tsx scripts/ebay-relabel-report.ts",
+    "workbook:import-catalogue": "tsx scripts/import-catalogue-from-workbook.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
