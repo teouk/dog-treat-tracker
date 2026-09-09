@@ -72,11 +72,13 @@ export default function InventoryDashboard() {
   const [amazonLoading, setAmazonLoading] = useState(false);
   const [fullSyncLoading, setFullSyncLoading] = useState(false);
   const [shopifyLoading, setShopifyLoading] = useState(false);
+  const [ebayLoading, setEbayLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [channel, setChannel] = useState<Channel>('all');
   const [shopifyConnected, setShopifyConnected] = useState(false);
+  const [ebayConnected, setEbayConnected] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showReceive, setShowReceive] = useState(false);
   const [deductAmazon, setDeductAmazon] = useState(true);
@@ -99,9 +101,10 @@ export default function InventoryDashboard() {
 
     (async () => {
       try {
-        const [invRes, shopRes, setRes] = await Promise.all([
+        const [invRes, shopRes, ebayRes, setRes] = await Promise.all([
           fetch('/api/inventory'),
           fetch('/api/shopify/status'),
+          fetch('/api/ebay/status'),
           fetch('/api/settings'),
         ]);
         if (cancelled) return;
@@ -109,6 +112,8 @@ export default function InventoryDashboard() {
         if (Array.isArray(inv)) setInventory(inv);
         const shop = await shopRes.json().catch(() => ({}));
         setShopifyConnected(!!shop.connected);
+        const ebay = await ebayRes.json().catch(() => ({}));
+        setEbayConnected(!!ebay.connected);
         const settings = await setRes.json().catch(() => ({}));
         if (typeof settings.deductOutboundAmazon === 'boolean') {
           setDeductAmazon(settings.deductOutboundAmazon);
@@ -244,6 +249,38 @@ export default function InventoryDashboard() {
       flash(e instanceof Error ? e.message : 'Sync failed', 5000);
     }
     setShopifyLoading(false);
+  }
+
+  async function triggerEbaySync() {
+    setEbayLoading(true);
+    setSyncStatus('Syncing eBay…');
+    try {
+      const res = await fetch('/api/sync/ebay');
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || body.error || 'Sync failed');
+      await fetchInventory();
+
+      const bits = [`${body.matched || 0} matched`];
+      if (body.unmatchedCount) bits.push(`${body.unmatchedCount} unmatched`);
+      if (body.clearedStale) bits.push(`${body.clearedStale} cleared`);
+      flash(`eBay: ${bits.join(', ')} of ${body.listingsReturned || 0} listings`, 8000);
+
+      // The unmatched list is the working document for relabelling listings in
+      // eBay, and is far too long to read in a toast.
+      if (body.unmatched?.length) {
+        console.table(body.unmatched);
+        console.info('[ebay] full unmatched list logged above — see docs/ebay-sync.md');
+      }
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Sync failed', 6000);
+    }
+    setEbayLoading(false);
+  }
+
+  async function disconnectEbay() {
+    if (!confirm('Disconnect eBay? You will need to re-authorise to sync again.')) return;
+    await fetch('/api/ebay/disconnect', { method: 'POST' });
+    setEbayConnected(false);
   }
 
   async function disconnectShopify() {
@@ -447,6 +484,25 @@ export default function InventoryDashboard() {
               </a>
             ))}
 
+            {showEbay && (ebayConnected ? (
+              <button
+                onClick={triggerEbaySync}
+                disabled={ebayLoading}
+                className={`${syncBtn} bg-sky-600 hover:bg-sky-700`}
+                title="Refresh eBay stock"
+              >
+                {ebayLoading
+                  ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  : <span aria-hidden>⟳</span>}
+                <span className="hidden sm:inline">eBay</span>
+              </button>
+            ) : (
+              <a href="/api/ebay/install" className={`${syncBtn} bg-sky-600 hover:bg-sky-700`}>
+                <span className="hidden sm:inline">Connect eBay</span>
+                <span className="sm:hidden">eBay</span>
+              </a>
+            ))}
+
             <ThemeToggle />
             <button
               onClick={() => signOut()}
@@ -505,6 +561,18 @@ export default function InventoryDashboard() {
             </p>
           )}
         </div>
+
+        {channel === 'ebay' && !ebayConnected && (
+          <div className="rounded-xl border border-sky-200 bg-sky-50 p-5 text-center dark:border-sky-800 dark:bg-sky-900/20">
+            <p className="font-semibold text-sky-800 dark:text-sky-300">eBay is not connected</p>
+            <p className="mt-1 text-sm text-sky-700 dark:text-sky-400">
+              Authorise eBay to pull listing quantities into the eBay column.
+            </p>
+            <a href="/api/ebay/install" className="mt-3 inline-block rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700">
+              Connect eBay
+            </a>
+          </div>
+        )}
 
         {channel === 'shopify' && !shopifyConnected && (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 text-center dark:border-emerald-800 dark:bg-emerald-900/20">
@@ -690,6 +758,12 @@ export default function InventoryDashboard() {
             />
             Deduct shop stock when stock is sent to Amazon
           </label>
+
+          {showEbay && ebayConnected && (
+            <button onClick={disconnectEbay} className="text-xs text-slate-400 transition-colors hover:text-red-500">
+              Disconnect eBay
+            </button>
+          )}
 
           {showShopify && shopifyConnected && (
             <button onClick={disconnectShopify} className="text-xs text-slate-400 transition-colors hover:text-red-500">

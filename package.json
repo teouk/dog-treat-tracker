@@ -12,12 +12,14 @@
     "workbook:import-depot": "tsx scripts/import-depot-from-workbook.ts",
     "workbook:import-missing": "tsx scripts/import-missing-products.ts",
     "verify:amazon": "tsx scripts/verify-amazon-client.ts",
-    "workbook:mirror": "tsx scripts/mirror-workbook-to-onedrive.ts"
+    "workbook:mirror": "tsx scripts/mirror-workbook-to-onedrive.ts",
+    "verify:ebay": "tsx scripts/verify-ebay-match.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
     "axios": "^1.13.6",
     "exceljs": "^4.4.0",
+    "fast-xml-parser": "^5.11.1",
     "jszip": "^3.10.1",
     "next": "16.1.6",
     "next-auth": "^5.0.0-beta.31",
